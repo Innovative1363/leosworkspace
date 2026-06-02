@@ -199,14 +199,14 @@ html,body{height:100%;overflow:hidden;background:#f1f5f9}
 // ════════════════════════════════════════════════════════════════════════
 //  ▼▼▼  PASTE YOUR GOOGLE APPS SCRIPT URL HERE  ▼▼▼
 // ════════════════════════════════════════════════════════════════════════
-const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbwb-ATibBeQuvdEkgAxjURivGznnzzwAL59YgQAsp-Lb1EoykdlQ91w1LIbcUk2SisvGQ/exec';  // ← your Apps Script URL
+const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbzBvTr1nXLHMSzI07xpyAcEyN6u0Mk63h3l9NDOrDVGLkCmy28wObL0r-YGzvOhQvHNhQ/exec';  // ← your Apps Script URL
 // ════════════════════════════════════════════════════════════════════════
 //  ▼▼▼  GOOGLE DRIVE FOLDER ID FOR FILE UPLOADS  ▼▼▼
 //  1. Create a folder in Google Drive e.g. "IUS Workspace Files"
 //  2. Open it — the URL will be: drive.google.com/drive/folders/XXXXXXX
 //  3. Copy XXXXXXX and paste it below AND into your Apps Script config
 // ════════════════════════════════════════════════════════════════════════
-const DRIVE_FOLDER_ID = '1Zo_EWKxt0qm99WUFWu5oSXVtil57qmPy';  // ← paste Google Drive folder ID here
+const DRIVE_FOLDER_ID = '1Zo_EWKxt0qm99WUFWu5oSXVtil57qmPy';  // ← Google Drive folder ID
 // ════════════════════════════════════════════════════════════════════════
 
 const SK='wsv6';
@@ -337,8 +337,7 @@ async function importFromSheets(){
   }
   if(!confirm('Import from Sheets? This will overwrite your current local data.'))return;
   setSyncStatus('Importing…');
-  // Use JSONP pattern to read response — inject a script tag pointing to the Apps Script URL
-  // The Apps Script doGet returns callback({...data...}) when ?callback=X is passed
+  // Use JSONP pattern — inject script tag, Apps Script wraps response in callback()
   const cbName='_wsImport'+Date.now();
   const script=document.createElement('script');
   script.src=SHEETS_URL+'?action=import&callback='+cbName;
@@ -349,13 +348,28 @@ async function importFromSheets(){
       if(data.tasks)S.tasks=data.tasks;
       if(data.archived)S.archived=data.archived;
       if(data.events)S.events=data.events;
-      if(data.clients)S.clients=data.clients;
       if(data.recurRules)S.recurRules=data.recurRules;
       if(data.sections&&data.sections.length)S.sections=data.sections;
+      // MERGE clients: keep BASE_COMPANIES as foundation, overlay saved data on top
+      if(data.clients&&data.clients.length){
+        const merged=[...BASE_COMPANIES.map(b=>({...b,notes:[...(b.notes||[])],files:[]}))];
+        data.clients.forEach(saved=>{
+          const idx=merged.findIndex(m=>m.company===saved.company);
+          if(idx>=0){
+            // update saved fields but keep base data for missing fields
+            Object.keys(saved).forEach(k=>{if(saved[k]!==undefined&&saved[k]!==null&&saved[k]!=='')merged[idx][k]=saved[k];});
+            if(saved.notes&&saved.notes.length)merged[idx].notes=saved.notes;
+            if(saved.files&&saved.files.length)merged[idx].files=saved.files;
+          } else {
+            merged.push({...saved,notes:saved.notes||[],files:saved.files||[]});
+          }
+        });
+        S.clients=merged;
+      }
       save();render();
-      setSyncStatus('✓ Imported '+new Date().toLocaleTimeString(),'ok');
+      setSyncStatus('✓ Imported '+new Date().toLocaleTimeString()+' ('+S.clients.length+' companies)','ok');
     }else{
-      setSyncStatus('Import failed','err');
+      setSyncStatus('Import failed — check Apps Script deployment','err');
     }
   };
   script.onerror=function(){
@@ -551,7 +565,13 @@ function renderClients(){
   const sel=S.selClient!==null?S.clients[S.selClient]:null;
   let list=`<div class="clist">
     <div class="clist-top">
-      <div class="clist-top-label"><span>Companies (${filtered.length}/${S.clients.length})</span><button class="btn" style="font-size:11px;padding:3px 9px" onclick="S.addClientModal={};render()">+ Add</button></div>
+      <div class="clist-top-label"><span>Companies (${filtered.length}/${S.clients.length})</span>
+        <div style="display:flex;gap:5px">
+          <button class="btn" style="font-size:11px;padding:3px 9px" onclick="document.getElementById('csv-import-input').click()" title="Import companies from CSV file">📥 CSV</button>
+          <input type="file" id="csv-import-input" accept=".csv" style="display:none" onchange="importCSV(event)"/>
+          <button class="btn" style="font-size:11px;padding:3px 9px" onclick="S.addClientModal={};render()">+ Add</button>
+        </div>
+      </div>
       <input class="csearch" id="csearch-input" placeholder="Search company, contact..." value="${(S.clientSearch||'').replace(/"/g,'&quot;')}"/>
       <div class="cfilters">${['All','Customer','Reach out','Follow-up','Has Notes'].map(f=>`<button class="cfilter${S.clientFilter===f?' active':''}" onclick="filterC('${f}')">${f}</button>`).join('')}</div>
     </div>
@@ -930,31 +950,52 @@ async function uploadOneFile(file,idx){
   const date=new Date().toISOString().slice(0,10);
 
   if(SHEETS_URL&&DRIVE_FOLDER_ID){
-    // Upload to Google Drive via Apps Script
     try{
       const b64=await toBase64(file);
-      await fetch(SHEETS_URL,{
-        method:'POST',
-        mode:'no-cors',
-        body:JSON.stringify({action:'uploadFile',filename:file.name,mimeType:file.type,data:b64})
-      });
-      // no-cors: can't read response URL — store as pending, user opens Drive to get link
-      S.clients[idx].files.push({name:file.name,url:'pending:'+file.name,date,note:'Uploaded — open Drive folder to copy link'});
+      // Use JSONP-style GET to upload — avoids CORS preflight entirely
+      // Encode as URL param (works for files up to ~1MB; for larger use chunks)
+      const cbName='_wsUpload'+Date.now();
+      const params=encodeURIComponent(JSON.stringify({action:'uploadFile',filename:file.name,mimeType:file.type,data:b64,folderId:DRIVE_FOLDER_ID}));
+      
+      // For small files (<800KB base64) use JSONP GET to get the real Drive URL back
+      if(params.length<800000){
+        const result=await new Promise((resolve,reject)=>{
+          const s=document.createElement('script');
+          s.src=SHEETS_URL+'?action=uploadFile&callback='+cbName+'&payload='+params;
+          window[cbName]=function(r){document.body.removeChild(s);delete window[cbName];resolve(r);};
+          s.onerror=function(){document.body.removeChild(s);delete window[cbName];reject(new Error('script error'));};
+          document.body.appendChild(s);
+          setTimeout(()=>{try{document.body.removeChild(s);}catch(e){}delete window[cbName];reject(new Error('timeout'));},30000);
+        });
+        if(result&&result.url){
+          S.clients[idx].files.push({name:file.name,url:result.url,date,note:'Uploaded to Drive'});
+          showFileStatus('✓ '+file.name+' uploaded — link saved');
+          save();render();
+          return;
+        }
+      }
+      
+      // Fallback: no-cors POST (file goes to Drive but we can't get the URL back)
+      await fetch(SHEETS_URL,{method:'POST',mode:'no-cors',
+        body:JSON.stringify({action:'uploadFile',filename:file.name,mimeType:file.type,data:b64,folderId:DRIVE_FOLDER_ID})});
+      const driveFolder='https://drive.google.com/drive/folders/'+DRIVE_FOLDER_ID;
+      S.clients[idx].files.push({name:file.name,url:driveFolder,date,note:'Click "Open" to view in Drive folder'});
       showFileStatus('✓ '+file.name+' uploaded to Drive');
       save();render();
       return;
     }catch(err){
-      showFileStatus('Upload failed — storing preview');
+      console.error('Upload error:',err);
+      showFileStatus('Upload failed — storing as preview');
     }
   }
 
-  // Fallback: images stored as preview, other files stored by name only
+  // Fallback: images as data URL preview, other files by name
   if(file.type.startsWith('image/')){
     const dataUrl=await toDataURL(file);
-    S.clients[idx].files.push({name:file.name,url:dataUrl,date,note:'Image preview'});
-    showFileStatus('✓ '+file.name+' attached as preview');
+    S.clients[idx].files.push({name:file.name,url:dataUrl,date,note:'Image preview (no Drive configured)'});
+    showFileStatus('✓ '+file.name+' stored as preview');
   } else {
-    S.clients[idx].files.push({name:file.name,url:'',date,note:'File name saved — no Drive folder configured'});
+    S.clients[idx].files.push({name:file.name,url:'',date,note:'Set DRIVE_FOLDER_ID to enable upload'});
     showFileStatus('📎 '+file.name+' name saved');
   }
   save();render();
@@ -992,6 +1033,60 @@ function removeFile(clientIdx,fileIdx){
   if(!confirm('Remove this file attachment?'))return;
   S.clients[clientIdx].files.splice(fileIdx,1);
   save();render();
+}
+
+function importCSV(e){
+  const file=e.target.files[0];if(!file)return;
+  const reader=new FileReader();
+  reader.onload=function(ev){
+    const lines=ev.target.result.split('\n').filter(l=>l.trim());
+    if(!lines.length)return;
+    // Parse headers from first row
+    const headers=lines[0].split(',').map(h=>h.replace(/^"|"$/g,'').trim().toLowerCase());
+    const map={
+      company:['company','name','company name','business','organization'],
+      contact:['contact','contact name','person','rep'],
+      phone:['phone','phone number','tel','telephone'],
+      email:['email','email address','e-mail'],
+      website:['website','web','url','site'],
+      address:['address','location','city','addr'],
+      stage:['stage','status','relationship'],
+      focus:['focus','services','type','industry'],
+      size:['size','employees','headcount']
+    };
+    function findCol(field){const aliases=map[field]||[field];for(const a of aliases){const i=headers.findIndex(h=>h.includes(a));if(i>=0)return i;}return -1;}
+    const cols={};Object.keys(map).forEach(k=>{cols[k]=findCol(k);});
+    
+    let added=0,updated=0;
+    for(let i=1;i<lines.length;i++){
+      // Handle quoted CSV values
+      const row=[];let cur='',inQ=false;
+      for(const ch of lines[i]+','){
+        if(ch==='"'){inQ=!inQ;}
+        else if(ch===','&&!inQ){row.push(cur.trim());cur='';}
+        else cur+=ch;
+      }
+      const get=c=>c>=0&&c<row.length?(row[c]||'').replace(/^"|"$/g,'').trim():'';
+      const company=get(cols.company);if(!company)continue;
+      const newClient={company,contact:get(cols.contact),phone:get(cols.phone),email:get(cols.email),
+        website:get(cols.website),address:get(cols.address),stage:get(cols.stage),
+        focus:get(cols.focus),size:get(cols.size),notes:[],files:[]};
+      const existing=S.clients.findIndex(c=>c.company.toLowerCase()===company.toLowerCase());
+      if(existing>=0){
+        // Merge: only update empty fields
+        Object.keys(newClient).forEach(k=>{if(newClient[k]&&!S.clients[existing][k])S.clients[existing][k]=newClient[k];});
+        updated++;
+      } else {
+        S.clients.push(newClient);added++;
+      }
+    }
+    save();render();
+    setSyncStatus('✓ CSV: +'+added+' new, '+updated+' updated','ok');
+    // Show CSV format help if nothing imported
+    if(!added&&!updated)alert('No companies imported. Make sure your CSV has a "Company" or "Name" column header in the first row.\n\nExample columns:\nCompany, Contact, Phone, Email, Website, Address, Stage, Focus, Size');
+  };
+  reader.readAsText(file);
+  e.target.value=''; // reset so same file can be re-imported
 }
 
 function bindLiveInputs(){
