@@ -611,12 +611,19 @@ function renderClients(){
 
 // ── MODALS ────────────────────────────────────────────────────────────────────
 function appendModal(html){
+  // Remove any existing overlays first to prevent stacking
+  document.querySelectorAll('.moverlay').forEach(el=>el.remove());
   const div=document.createElement('div');div.className='moverlay';
   div.onclick=e=>{if(e.target===div)closeAllModals();};
   div.innerHTML=html;document.body.appendChild(div);
   setTimeout(()=>{const f=div.querySelector('input,textarea');if(f)f.focus();},40);
 }
-function closeAllModals(){S.modal=S.calModal=S.recurModal=S.addClientModal=S.addToPlannerModal=null;render();}
+function closeAllModals(){
+  S.modal=S.calModal=S.recurModal=S.addClientModal=S.addToPlannerModal=null;
+  // Remove any lingering modal overlay divs from the DOM
+  document.querySelectorAll('.moverlay').forEach(el=>el.remove());
+  render();
+}
 
 function buildTaskModal(){
   const t=S.editId?S.tasks.find(x=>x.id===S.editId):null;
