@@ -200,7 +200,7 @@ html,body{height:100%;overflow:hidden;background:#f1f5f9}
 // ════════════════════════════════════════════════════════════════════════
 //  ▼▼▼  PASTE YOUR GOOGLE APPS SCRIPT URL HERE  ▼▼▼
 // ════════════════════════════════════════════════════════════════════════
-const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbwb-ATibBeQuvdEkgAxjURivGznnzzwAL59YgQAsp-Lb1EoykdlQ91w1LIbcUk2SisvGQ/exec';  // ← your Apps Script URL
+const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbzBvTr1nXLHMSzl07xpyAcEyN6u0Mk63h3l9NDOrDVGLkCmy28wObL0r-YGzvOhQvHNhQ/exec';  // ← your Apps Script URL
 // ════════════════════════════════════════════════════════════════════════
 //  ▼▼▼  GOOGLE DRIVE FOLDER ID FOR FILE UPLOADS  ▼▼▼
 //  1. Create a folder in Google Drive e.g. "IUS Workspace Files"
@@ -325,7 +325,7 @@ let S={
   tasks:[],archived:[],events:[],recurRules:[],
   weekOffset:0,
   modal:null,calModal:null,recurModal:null,addClientModal:null,addToPlannerModal:null,
-  editId:null,
+  editId:null,editRecurId:null,
   clients:null,
   selClient:null,
   clientSearch:'',clientFilter:'All',
@@ -594,47 +594,70 @@ function render(){
 function renderPlanner(){
   const m1=getMonday(S.weekOffset),m2=getMonday(S.weekOffset+1);
   const d1=weekDays(m1),d2=weekDays(m2);
-  // Get dates for the current top week view
+  // Sidebar shows ONLY tasks relevant to the TOP (primary) week displayed
   const topWeekDates=new Set(d1.map(d=>fmtDate(d)));
-  // Get recurring events that fall in the current top week
+  // Regular tasks: show tasks whose due date falls in the top week, OR tasks with no due date
+  // Recurring: only show instances that land in the top week
   const recurThisWeek=S.events.filter(ev=>ev.recurId&&topWeekDates.has(ev.date));
 
+  // Separate tasks: due this week vs overdue vs no date
+  const tasksThisWeek=S.tasks.filter(t=>t.due&&topWeekDates.has(t.due));
+  const tasksOverdue=S.tasks.filter(t=>t.due&&t.due<fmtDate(d1[0]));
+  const tasksNoDate=S.tasks.filter(t=>!t.due);
+  // Tasks relevant to show = this week + no date + overdue (always visible as reminder)
+  const relevantTaskIds=new Set([
+    ...tasksThisWeek.map(t=>t.id),
+    ...tasksNoDate.map(t=>t.id),
+    ...tasksOverdue.map(t=>t.id)
+  ]);
+
+  const weekLabel=S.weekOffset===0?'This week':S.weekOffset===1?'Next week':
+    S.weekOffset===-1?'Last week':'Week '+(S.weekOffset>0?'+':'')+S.weekOffset;
+
   let sb='<div class="sb">';
-  // Week indicator at top of sidebar
-  sb+=`<div style="background:#1e3a5f;border-radius:8px;padding:7px 11px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
-    <span style="font-size:11px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.06em">
-      ${fmtShort(m1)} – ${fmtShort(d1[6])}
-    </span>
-    <span style="font-size:10px;color:rgba(255,255,255,.7)">${S.weekOffset===0?'This week':S.weekOffset===1?'Next week':'Week '+(S.weekOffset>0?'+':'')+S.weekOffset}</span>
+  sb+=`<div style="background:#1e3a5f;border-radius:8px;padding:7px 11px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;margin-bottom:2px">
+    <span style="font-size:11px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.06em">${fmtShort(d1[0])} – ${fmtShort(d1[6])}</span>
+    <span style="font-size:10px;background:rgba(255,255,255,.15);color:#fff;padding:1px 8px;border-radius:99px">${weekLabel}</span>
   </div>`;
 
+  // Overdue banner if viewing current week
+  if(S.weekOffset===0&&tasksOverdue.length){
+    sb+=`<div style="background:#fef2f2;border:1.5px solid #fca5a5;border-radius:8px;padding:7px 11px;font-size:11px;color:#991b1b;font-weight:700;flex-shrink:0">
+      ⚠️ ${tasksOverdue.length} overdue task${tasksOverdue.length>1?'s':''} — scroll down to see them
+    </div>`;
+  }
+
   S.sections.forEach(sec=>{
-    const active=S.tasks.filter(t=>t.secId===sec.id);
-    // Find recurring events for this section that fall in the displayed week
+    // Tasks for this section that are relevant to the displayed week
+    const secTasks=S.tasks.filter(t=>t.secId===sec.id&&relevantTaskIds.has(t.id));
+    // Recurring instances for this section in the displayed week
     const recurForSec=recurThisWeek.filter(ev=>{
       const rule=S.recurRules.find(r=>r.id===ev.recurId);
       return rule&&(rule.cat===sec.cat||rule.cat===sec.name);
     });
-    const hasContent=active.length||recurForSec.length;
+    const hasContent=secTasks.length||recurForSec.length;
     sb+=`<div class="sec-block ${sec.style||'s-other'}" ondragover="event.preventDefault()" ondrop="dropSec(event,'${sec.id}')">`;
     sb+=`<div class="sec-hdr"><span class="sec-name" onclick="renSec('${sec.id}')">${sec.name}</span><button class="addbtn" onclick="openAdd('${sec.id}')">+</button></div>`;
-    if(!hasContent)sb+=`<div class="no-tasks">No tasks</div>`;
-    // Show recurring task cards for this week first
+    if(!hasContent)sb+=`<div class="no-tasks">No tasks this week</div>`;
+    // Recurring cards first (purple) — clickable to edit
     recurForSec.forEach(ev=>{
       const rule=S.recurRules.find(r=>r.id===ev.recurId);
       if(!rule)return;
       const dow=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(ev.date+'T12:00:00').getDay()];
-      sb+=`<div class="tcard" style="border-left:3px solid #6366f1;opacity:.9">
+      sb+=`<div class="tcard" style="border-left:3px solid #6366f1;cursor:pointer" onclick="openEditRecur('${rule.id}')">
+        <button class="del-tc" onclick="event.stopPropagation();delRecur('${rule.id}')" title="Delete recurring rule">✕</button>
         <div class="tcard-title" style="color:#3730a3">🔁 ${rule.title}</div>
+        ${rule.note?`<div class="tcard-notes">${rule.note}</div>`:''}
         <div class="tcard-meta">
-          <span class="badge" style="background:#e0e7ff;color:#3730a3">recurring</span>
+          <span class="badge" style="background:#e0e7ff;color:#3730a3">${rule.freq}</span>
           <span class="b-due">${dow} ${ev.date.slice(5)}</span>
-          ${rule.endDate?`<span style="font-size:10px;color:#64748b">until ${rule.endDate}</span>`:'<span style="font-size:10px;color:#64748b">ongoing</span>'}
+          <span style="font-size:10px;color:#64748b">${rule.endDate?'until '+rule.endDate:'ongoing'}</span>
+          <span style="font-size:10px;padding:1px 6px;border-radius:4px;background:#f0f4ff;color:#1e3a8a;border:1px solid #bfdbfe">✏ Edit</span>
         </div>
       </div>`;
     });
-    // Show regular tasks
-    active.forEach(t=>sb+=renderCard(t));
+    // Regular tasks for this week
+    secTasks.forEach(t=>sb+=renderCard(t));
     sb+=`</div>`;
   });
   sb+=`<div class="add-sec-btn" onclick="addSec()">+ Add section</div></div>`;
@@ -758,10 +781,11 @@ function renderClients(){
   let list=`<div class="clist">
     <div class="clist-top">
       <div class="clist-top-label"><span>Companies (${filtered.length}/${S.clients.length})</span>
-        <div style="display:flex;gap:5px">
-          <button class="btn" style="font-size:11px;padding:3px 9px" onclick="document.getElementById('csv-import-input').click()" title="Import companies from CSV file">📥 CSV</button>
+        <div style="display:flex;gap:4px;flex-wrap:wrap">
+          <button class="btn" style="font-size:11px;padding:3px 8px" onclick="exportClientsCSV()" title="Export all clients to CSV">📤 CSV</button>
+          <button class="btn" style="font-size:11px;padding:3px 8px" onclick="document.getElementById('csv-import-input').click()" title="Import companies from CSV file">📥 CSV</button>
           <input type="file" id="csv-import-input" accept=".csv" style="display:none" onchange="importCSV(event)"/>
-          <button class="btn" style="font-size:11px;padding:3px 9px" onclick="S.addClientModal={};render()">+ Add</button>
+          <button class="btn" style="font-size:11px;padding:3px 8px" onclick="S.addClientModal={};render()">+ Add</button>
         </div>
       </div>
       <input class="csearch" id="csearch-input" placeholder="Search company, contact..." value="${(S.clientSearch||'').replace(/"/g,'&quot;')}"/>
@@ -882,7 +906,7 @@ function appendModal(html){
 }
 function closeAllModals(){
   S.modal=S.calModal=S.recurModal=S.addClientModal=S.addToPlannerModal=null;
-  // Remove any lingering modal overlay divs from the DOM
+  S.editRecurId=null;
   document.querySelectorAll('.moverlay').forEach(el=>el.remove());
   render();
 }
@@ -932,6 +956,9 @@ function buildCalModal(){
 
 function buildRecurModal(){
   const catOpts=S.sections.map(s=>`<option value="${s.cat||s.name}">${s.name}</option>`).join('');
+  const editing=S.editRecurId?S.recurRules.find(r=>r.id===S.editRecurId):null;
+
+  // List of existing rules (shown when not editing)
   const existing=S.recurRules.map(r=>`
     <div style="display:flex;align-items:flex-start;gap:8px;padding:9px 0;border-bottom:1px solid #e2e8f0">
       <div style="flex:1">
@@ -945,32 +972,59 @@ function buildRecurModal(){
             :'<span style="background:#d1fae5;color:#065f46;padding:1px 6px;border-radius:4px;font-weight:700">ongoing</span>'}
         </div>
       </div>
+      <button class="btn" style="font-size:10px;padding:2px 7px;color:#1e3a8a;border-color:#bfdbfe;margin-right:4px" onclick="openEditRecur('${r.id}')">✏ Edit</button>
       <button class="btn" style="font-size:10px;padding:2px 7px;color:#c00;border-color:#fca5a5" onclick="delRecur('${r.id}')">Del</button>
     </div>`).join('');
+
+  // Pre-fill values if editing
+  const v={
+    title: editing?editing.title:'',
+    freq:  editing?editing.freq:'Weekly',
+    start: editing?editing.startDate:todayStr(),
+    end:   editing?editing.endDate||'':'',
+    cat:   editing?editing.cat:'',
+    hr:    editing?editing.hour:8,
+    note:  editing?editing.note||'':''
+  };
+
+  const freqOpts=RECUR_OPTIONS.map(o=>`<option${v.freq===o?' selected':''}>${o}</option>`).join('');
+  const catOptsE=S.sections.map(s=>{
+    const val=s.cat||s.name;
+    return `<option value="${val}"${v.cat===val?' selected':''}>${s.name}</option>`;
+  }).join('');
+  const hrOpts=HOURS.map((h,i)=>`<option value="${h}"${h===v.hr?' selected':''}>${HLBL[i]}</option>`).join('');
+
   return `<div class="mbox" onclick="event.stopPropagation()" style="width:480px">
-    <h3>🔁 Recurring tasks</h3>
-    ${existing||'<div style="font-size:13px;color:#94a3b8;margin-bottom:10px">No recurring tasks yet</div>'}
-    <div style="border-top:2px solid #e8eef8;margin:12px 0 10px;font-weight:700;font-size:13px;padding-top:12px">Add new recurring task</div>
-    <div class="mfield"><label>Title</label><input id="r-title" placeholder="e.g. Pay Poncho, Weekly check-in, Friday vendor call"/></div>
-    <div class="mrow">
-      <div class="mfield"><label>Frequency</label><select id="r-freq">${RECUR_OPTIONS.map(o=>`<option>${o}</option>`).join('')}</select></div>
-      <div class="mfield"><label>Start date</label><input id="r-start" type="date" value="${todayStr()}"/></div>
+    <h3>${editing?'✏ Edit recurring task':'🔁 Recurring tasks'}</h3>
+    ${!editing?(existing||'<div style="font-size:13px;color:#94a3b8;margin-bottom:10px">No recurring tasks yet</div>'):''}
+    <div style="border-top:2px solid #e8eef8;margin:${editing?'0':' 12px 0'} 10px;font-weight:700;font-size:13px;padding-top:12px">
+      ${editing?'Edit rule':'Add new recurring task'}
+    </div>
+    <div class="mfield"><label>Title</label>
+      <input id="r-title" value="${v.title}" placeholder="e.g. Pay Poncho, Weekly check-in"/>
     </div>
     <div class="mrow">
-      <div class="mfield"><label>Category / Section</label><select id="r-cat">${catOpts}</select></div>
-      <div class="mfield"><label>Time</label><select id="r-hr">${HOURS.map((h,i)=>`<option value="${h}">${HLBL[i]}</option>`).join('')}</select></div>
+      <div class="mfield"><label>Frequency</label><select id="r-freq">${freqOpts}</select></div>
+      <div class="mfield"><label>Start date</label><input id="r-start" type="date" value="${v.start}"/></div>
+    </div>
+    <div class="mrow">
+      <div class="mfield"><label>Section</label><select id="r-cat">${catOptsE}</select></div>
+      <div class="mfield"><label>Time</label><select id="r-hr">${hrOpts}</select></div>
     </div>
     <div class="mfield">
-      <label>End date <span style="font-weight:400;text-transform:none;font-size:10px">(leave blank for ongoing — runs until you delete it)</span></label>
-      <input id="r-end" type="date" placeholder="Leave blank = ongoing forever"/>
+      <label>End date <span style="font-weight:400;text-transform:none;font-size:10px">(leave blank = ongoing forever)</span></label>
+      <input id="r-end" type="date" value="${v.end}"/>
     </div>
-    <div class="mfield"><label>Note (shows on calendar)</label><input id="r-note" placeholder="Brief description..."/></div>
+    <div class="mfield"><label>Note (shows on calendar)</label>
+      <input id="r-note" value="${v.note}" placeholder="Brief description..."/>
+    </div>
     <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:12px;color:#0369a1">
-      💡 Recurring tasks show on the calendar AND in the sidebar for whichever week you're viewing.
+      💡 Recurring tasks show on the calendar AND in the sidebar for the week you're viewing.
     </div>
     <div class="modal-btns">
+      ${editing?`<button class="btn" onclick="S.editRecurId=null;render()">← Back to list</button>`:''}
       <button class="btn" onclick="closeAllModals()">Close</button>
-      <button class="btn primary" onclick="saveRecur()">+ Add rule</button>
+      <button class="btn primary" onclick="saveRecur()">${editing?'💾 Save changes':'+ Add rule'}</button>
     </div>
   </div>`;
 }
@@ -1084,19 +1138,39 @@ function saveCalEv(){
   S.events.push({id:'e'+Date.now(),title,cat:document.getElementById('ce-cat').value,date:document.getElementById('ce-date').value,hour:parseInt(document.getElementById('ce-hr').value),note:document.getElementById('ce-note').value});
   save();S.calModal=null;render();
 }
+function openEditRecur(id){
+  S.editRecurId=id;
+  S.recurModal={};
+  render();
+}
+
 function saveRecur(){
-  const title=(document.getElementById('r-title').value||'').trim();if(!title)return;
-  const endDateEl=document.getElementById('r-end');
-  const endDate=endDateEl&&endDateEl.value?endDateEl.value:''; // empty = ongoing
-  S.recurRules.push({
-    id:'rr'+Date.now(),title,
-    freq:document.getElementById('r-freq').value,
-    startDate:document.getElementById('r-start').value,
-    endDate,
-    cat:document.getElementById('r-cat').value,
-    hour:parseInt(document.getElementById('r-hr').value),
-    note:document.getElementById('r-note').value
-  });
+  const title=(document.getElementById('r-title').value||'').trim();
+  if(!title)return;
+  const freq=document.getElementById('r-freq').value;
+  const startDate=document.getElementById('r-start').value;
+  const endDate=document.getElementById('r-end').value||'';
+  const cat=document.getElementById('r-cat').value;
+  const hour=parseInt(document.getElementById('r-hr').value);
+  const note=document.getElementById('r-note').value;
+
+  if(S.editRecurId){
+    // Editing existing rule — update in place
+    const rule=S.recurRules.find(r=>r.id===S.editRecurId);
+    if(rule){
+      const oldCat=rule.cat;
+      const oldFreq=rule.freq;
+      Object.assign(rule,{title,freq,startDate,endDate,cat,hour,note});
+      // Remove old generated events for this rule so they regenerate with new settings
+      S.events=S.events.filter(e=>e.recurId!==S.editRecurId);
+    }
+    S.editRecurId=null;
+  } else {
+    // Adding new rule
+    S.recurRules.push({
+      id:'rr'+Date.now(),title,freq,startDate,endDate,cat,hour,note
+    });
+  }
   save();render();
 }
 function delRecur(id){S.recurRules=S.recurRules.filter(r=>r.id!==id);S.events=S.events.filter(e=>e.recurId!==id);save();render();}
@@ -1457,6 +1531,48 @@ function showEmailSetup(){
     </div>
   </div>`;
   document.body.appendChild(div);
+}
+
+function exportClientsCSV(){
+  // Build CSV with all client data including last note
+  const headers=['Company','Stage','Contact','Phone','Email','Website','Address','Size','Focus','Last Note Date','Last Note','Total Notes','Files'];
+  const rows=S.clients.map(c=>{
+    const lastNote=c.notes&&c.notes.length?c.notes[c.notes.length-1]:null;
+    const fileList=(c.files||[]).map(f=>f.name+(f.url&&!f.url.startsWith('pending:')?' ('+f.url+')':'')).join(' | ');
+    return [
+      c.company||'',
+      c.stage||'',
+      c.contact||'',
+      c.phone||'',
+      c.email||'',
+      c.website||'',
+      c.address||'',
+      c.size||'',
+      c.focus||'',
+      lastNote?lastNote.date:'',
+      lastNote?lastNote.note:'',
+      c.notes?c.notes.length:0,
+      fileList
+    ];
+  });
+
+  // Escape CSV values
+  const escape=v=>{
+    const s=String(v==null?'':v);
+    return s.includes(',')||s.includes('"')||s.includes('\n')?'"'+s.replace(/"/g,'""')+'"':s;
+  };
+
+  const csvContent=[headers,...rows].map(r=>r.map(escape).join(',')).join('\n');
+  const blob=new Blob([csvContent],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download='IUS_Clients_'+new Date().toISOString().slice(0,10)+'.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  setSyncStatus('✓ Exported '+S.clients.length+' clients to CSV','ok');
 }
 
 function bindLiveInputs(){
