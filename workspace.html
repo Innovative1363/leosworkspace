@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IUS Workspace</title>
+<style>
+/* ── RESET & BASE ─────────────────────────────────────────────────────── */
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Segoe UI',Arial,sans-serif}
+html,body{height:100%;overflow:hidden;background:#f1f5f9}
+
+/* ── LAYOUT ───────────────────────────────────────────────────────────── */
+.ws{display:flex;flex-direction:column;height:100vh}
+.tab-bar{display:flex;align-items:center;border-bottom:2px solid #1e3a8a;padding:0 14px;background:#e8eef8;flex-shrink:0;height:46px;gap:0}
+.tab{padding:0 20px;font-size:14px;font-weight:700;cursor:pointer;border-bottom:3px solid transparent;margin-bottom:-2px;color:#555;height:46px;display:flex;align-items:center;gap:6px;white-space:nowrap}
+.tab.active{color:#1e3a8a;border-bottom-color:#1e3a8a}
+.tab:hover:not(.active){color:#1e3a8a;background:rgba(30,58,138,.07)}
+.tab-spacer{flex:1}
+.sync-bar{display:flex;align-items:center;gap:8px;padding:0 4px}
+.sync-status{font-size:11px;color:#64748b;font-weight:600}
+.sync-status.ok{color:#065f46}
+.sync-status.err{color:#991b1b}
+#tab-content{flex:1;overflow:hidden;display:flex;flex-direction:column}
+
+/* ── SIDEBAR ──────────────────────────────────────────────────────────── */
+.planner-layout{display:flex;flex:1;overflow:hidden}
+.sb{width:340px;min-width:280px;display:flex;flex-direction:column;gap:7px;padding:10px 9px;background:#eef2f9;border-right:2px solid #c7d2e8;overflow-y:auto;flex-shrink:0}
+.main{flex:1;padding:10px 12px;display:flex;flex-direction:column;gap:8px;overflow-y:auto;min-width:0}
+
+/* ── SECTION BLOCKS ───────────────────────────────────────────────────── */
+.sec-block{border-radius:10px;padding:9px 10px;border:2px solid rgba(0,0,0,.12);flex-shrink:0}
+.s-patches{background:#dbeafe;border-color:#93c5fd}
+.s-followup{background:#d1fae5;border-color:#6ee7b7}
+.s-reachout{background:#fef9c3;border-color:#fbbf24}
+.s-samples{background:#ede9fe;border-color:#a78bfa}
+.s-todo{background:#fce7f3;border-color:#f9a8d4}
+.s-other{background:#f3f4f6;border-color:#d1d5db}
+.s-custom{background:#ffe4e6;border-color:#fca5a5}
+.sec-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:4px}
+.sec-name{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;cursor:pointer;flex:1}
+.s-patches .sec-name{color:#1e40af}.s-followup .sec-name{color:#065f46}.s-reachout .sec-name{color:#92400e}
+.s-samples .sec-name{color:#4c1d95}.s-todo .sec-name{color:#9d174d}.s-other .sec-name{color:#374151}.s-custom .sec-name{color:#9f1239}
+.addbtn{background:rgba(255,255,255,.8);border:1.5px solid rgba(0,0,0,.2);border-radius:50%;width:20px;height:20px;cursor:pointer;font-size:14px;color:#333;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.addbtn:hover{background:#fff}
+
+/* ── TASK CARDS ───────────────────────────────────────────────────────── */
+.tcard{background:#fff;border:1.5px solid rgba(0,0,0,.13);border-radius:8px;padding:7px 9px;margin-bottom:4px;cursor:pointer;position:relative}
+.tcard-title{font-weight:700;color:#111;padding-right:16px;font-size:13px;margin-bottom:2px}
+.tcard-notes{font-size:11px;color:#555;margin-bottom:3px;line-height:1.35;font-style:italic}
+.tcard-meta{display:flex;flex-wrap:wrap;gap:3px;align-items:center}
+.badge{font-size:10px;padding:1px 6px;border-radius:99px;font-weight:700}
+.b-urgent{background:#fecaca;color:#7f1d1d}.b-normal{background:#e5e7eb;color:#374151}
+.b-due{font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(0,0,0,.07);color:#444}
+.b-overdue{font-size:10px;padding:1px 5px;border-radius:4px;background:#fecaca;color:#7f1d1d}
+.gcal-btn{font-size:10px;padding:1px 6px;border-radius:4px;background:#4285F4;color:#fff;border:none;cursor:pointer}
+.done-btn{font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(0,0,0,.07);color:#333;border:1px solid rgba(0,0,0,.13);cursor:pointer}
+.done-btn:hover{background:#bbf7d0;color:#14532d}
+.del-tc{position:absolute;top:4px;right:5px;background:none;border:none;cursor:pointer;font-size:11px;color:#ccc}
+.del-tc:hover{color:#c00}
+.no-tasks{font-size:11px;color:rgba(0,0,0,.3);text-align:center;padding:7px 0}
+.add-sec-btn{background:rgba(0,0,0,.04);border:2px dashed rgba(0,0,0,.17);border-radius:8px;padding:7px;text-align:center;font-size:12px;color:#666;cursor:pointer;margin-top:2px;flex-shrink:0}
+.add-sec-btn:hover{background:rgba(0,0,0,.08)}
+
+/* ── CALENDAR ─────────────────────────────────────────────────────────── */
+.wk-label{font-size:14px;font-weight:700;color:#111}
+.wk-tag{font-size:10px;padding:2px 9px;border-radius:99px;font-weight:700;margin-left:5px}
+.wt-now{background:#1e3a8a;color:#fff}.wt-next{background:#d1d5db;color:#374151}
+.cal-nav{background:#fff;border:1.5px solid #cbd5e1;border-radius:7px;padding:3px 12px;cursor:pointer;font-size:15px;color:#111;font-weight:700}
+.cal-nav:hover{background:#e8eef8}
+.week-wrap{border:2px solid #94a3b8;border-radius:10px;overflow:hidden;background:#fff;flex-shrink:0}
+.cgrid{display:grid;grid-template-columns:52px repeat(7,1fr)}
+.th{padding:7px 3px;text-align:center;background:#1e3a5f;font-size:12px;color:#fff;border-right:1px solid rgba(255,255,255,.15);font-weight:700}
+.th:first-child{background:#152a47}.th.tday{background:#d97706}
+.th .dn{font-size:16px;font-weight:700}.th .dd{font-size:10px;opacity:.8}
+.time-h{font-size:11px;color:#94a3b8;text-align:right;padding:3px 5px 0;border-right:2px solid #e2e8f0;border-bottom:1px solid #e2e8f0;font-weight:700;min-height:54px;display:flex;align-items:flex-start;justify-content:flex-end}
+.cc{border-right:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;cursor:pointer;min-height:54px;overflow:hidden;display:flex;flex-direction:column;gap:1px;padding:2px 1px}
+.cc:hover{background:#eff6ff}.cc.tday-col{background:#fffbeb}
+.ev{border-radius:4px;font-size:10px;font-weight:700;padding:2px 4px;overflow:hidden;flex-shrink:0}
+.ev-row{display:flex;justify-content:space-between;align-items:center}
+.ev-txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:700}
+.ev-note{font-size:9px;opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ev-del{background:none;border:none;font-size:10px;cursor:pointer;opacity:.7;flex-shrink:0;padding:0;line-height:1}
+.ev-patches{background:#bfdbfe;color:#1e3a8a}.ev-followup{background:#a7f3d0;color:#064e3b}
+.ev-reachout{background:#fde68a;color:#78350f}.ev-samples{background:#ddd6fe;color:#3b0764}
+.ev-todo{background:#fce7f3;color:#9d174d}.ev-other{background:#e5e7eb;color:#1f2937}.ev-custom{background:#fecdd3;color:#881337}
+.sg .cc{min-height:28px}.sg .time-h{min-height:28px;font-size:9px;padding-top:2px}
+.sg .th{padding:3px}.sg .th .dn{font-size:11px}.sg .ev-note{display:none}
+.top-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex-shrink:0}
+
+/* ── BUTTONS ──────────────────────────────────────────────────────────── */
+.btn{padding:6px 14px;border-radius:8px;font-size:13px;cursor:pointer;border:1.5px solid #d1d5db;background:#fff;color:#111;font-weight:700}
+.btn:hover{background:#e8eef8}
+.btn.primary{background:#1e3a8a;color:#fff;border-color:#1e3a8a}
+.btn.primary:hover{background:#1e40af}
+.btn.green{background:#065f46;color:#fff;border-color:#065f46}
+.btn.green:hover{background:#047857}
+
+/* ── MODALS ───────────────────────────────────────────────────────────── */
+.moverlay{position:fixed;inset:0;z-index:200;background:rgba(15,23,42,.65);display:flex;align-items:center;justify-content:center;padding:16px}
+.mbox{background:#fff;border-radius:14px;padding:22px;width:420px;border:2px solid #94a3b8;max-height:90vh;overflow-y:auto;box-shadow:0 10px 40px rgba(0,0,0,.22)}
+.mbox h3{font-size:16px;font-weight:700;margin-bottom:14px;color:#111;border-bottom:2px solid #e8eef8;padding-bottom:10px}
+.mfield{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}
+.mfield label{font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.06em}
+.mfield input,.mfield select,.mfield textarea{width:100%;font-size:13px;padding:8px 10px;border-radius:8px;border:2px solid #cbd5e1;background:#f8fafc;color:#111;outline:none;font-family:'Segoe UI',Arial,sans-serif}
+.mfield input:focus,.mfield select:focus,.mfield textarea:focus{border-color:#1e3a8a;background:#fff}
+.mfield textarea{resize:vertical;min-height:72px;line-height:1.5}
+.mrow{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.modal-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:10px;padding-top:10px;border-top:2px solid #e8eef8}
+
+/* ── CLIENTS ──────────────────────────────────────────────────────────── */
+.clients-layout{display:flex;flex:1;overflow:hidden}
+.clist{width:290px;min-width:240px;display:flex;flex-direction:column;border-right:2px solid #c7d2e8;background:#eef2f9;flex-shrink:0}
+.clist-top{padding:10px 12px;border-bottom:2px solid #c7d2e8;background:#dde5f5;flex-shrink:0}
+.clist-top-label{font-size:12px;font-weight:700;color:#1e3a8a;text-transform:uppercase;letter-spacing:.07em;margin-bottom:7px;display:flex;justify-content:space-between;align-items:center}
+.csearch{width:100%;padding:8px 10px;border:2px solid #b6c4de;border-radius:8px;font-size:13px;background:#fff;color:#111;font-family:'Segoe UI',Arial,sans-serif;display:block}
+.csearch:focus{border-color:#1e3a8a;outline:none}
+.cfilters{display:flex;gap:4px;flex-wrap:wrap;margin-top:7px}
+.cfilter{font-size:10px;padding:2px 8px;border-radius:99px;border:1.5px solid #b6c4de;cursor:pointer;background:#fff;font-weight:700;color:#374151}
+.cfilter.active{background:#1e3a8a;color:#fff;border-color:#1e3a8a}
+.clist-scroll{overflow-y:auto;flex:1}
+.crow{padding:9px 13px;border-bottom:1.5px solid #dde5f5;cursor:pointer}
+.crow:hover,.crow.sel{background:#fff}
+.crow.sel{border-left:3px solid #1e3a8a;padding-left:10px;background:#f0f4ff}
+.crow-name{font-size:13px;font-weight:700;color:#111}
+.crow-meta{font-size:11px;color:#64748b;margin-top:2px}
+.crow-snip{font-size:11px;color:#94a3b8;margin-top:2px;font-style:italic;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stage-pill{display:inline-block;font-size:10px;padding:2px 7px;border-radius:99px;font-weight:700}
+.sp-customer{background:#bbf7d0;color:#14532d}.sp-reachout{background:#fde68a;color:#78350f}
+.sp-followup{background:#bfdbfe;color:#1e3a8a}.sp-phonecall{background:#ddd6fe;color:#3b0764}.sp-other{background:#e5e7eb;color:#374151}
+.cdetail{flex:1;overflow-y:auto}
+.cd-header{padding:16px 20px 12px;border-bottom:2px solid #e2e8f0;background:#fff;position:sticky;top:0;z-index:5}
+.cd-name{font-size:20px;font-weight:700;color:#111;margin-bottom:5px}
+.cd-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.cd-body{padding:14px 20px}
+.cd-info-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;border:2px solid #e2e8f0;border-radius:10px;padding:12px;background:#f8fafc}
+.cd-info-label{font-size:10px;font-weight:700;text-transform:uppercase;color:#94a3b8;margin-bottom:2px}
+.cd-info-val{font-size:13px;color:#111;line-height:1.4;word-break:break-word}
+.notes-section{border:2px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:14px}
+.notes-header{padding:9px 13px;background:#1e3a5f;font-size:12px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.07em}
+.note-row{display:flex;gap:8px;padding:9px 13px;border-bottom:1px solid #f1f5f9;align-items:flex-start}
+.note-row:last-child{border-bottom:none}
+.note-date{font-size:11px;color:#64748b;min-width:82px;font-weight:700;flex-shrink:0}
+.note-type-badge{font-size:9px;padding:2px 6px;border-radius:4px;background:#ddd6fe;color:#3b0764;font-weight:700;flex-shrink:0}
+.note-text{font-size:13px;color:#111;flex:1;line-height:1.5}
+.add-note-section{border:2px solid #1e3a8a;border-radius:10px;overflow:hidden;margin-bottom:10px}
+.add-note-header{padding:9px 13px;background:#1e3a8a;font-size:12px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.07em}
+.add-note-body{padding:12px;background:#f0f4ff}
+.ani{padding:8px 10px;border:2px solid #b6c4de;border-radius:8px;background:#fff;color:#111;font-size:12px;font-family:'Segoe UI',Arial,sans-serif}
+.ani:focus{border-color:#1e3a8a;outline:none}
+.anita{width:100%;padding:8px 10px;border:2px solid #b6c4de;border-radius:8px;background:#fff;color:#111;font-size:13px;font-family:'Segoe UI',Arial,sans-serif;resize:vertical;min-height:68px;margin-bottom:9px}
+.anita:focus{border-color:#1e3a8a;outline:none}
+.cd-task-btn{padding:7px 14px;border-radius:8px;background:#1e3a8a;color:#fff;border:none;cursor:pointer;font-weight:700;font-size:12px}
+.cd-task-btn:hover{background:#1e40af}
+.cd-task-btn.green{background:#065f46}.cd-task-btn.green:hover{background:#047857}
+.cdetail-empty{flex:1;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:14px;background:#f8fafc}
+
+/* ── ARCHIVE ──────────────────────────────────────────────────────────── */
+.archive-layout{display:flex;flex-direction:column;flex:1;overflow:hidden;padding:16px 20px;gap:12px}
+.archive-topbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex-shrink:0}
+.archive-search{padding:8px 12px;border:2px solid #cbd5e1;border-radius:8px;font-size:13px;background:#fff;color:#111;width:260px}
+.archive-search:focus{border-color:#1e3a8a;outline:none}
+.archive-scroll{flex:1;overflow-y:auto}
+.archive-sec{margin-bottom:18px}
+.archive-sec-hdr{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#475569;padding:7px 10px;background:#e2e8f0;border-radius:8px;margin-bottom:6px}
+.acard{background:#fff;border:1.5px solid #e2e8f0;border-radius:8px;padding:8px 12px;margin-bottom:5px;display:flex;align-items:flex-start;gap:10px}
+.acard-left{flex:1;min-width:0}
+.acard-name{font-size:13px;font-weight:700;color:#374151;text-decoration:line-through;margin-bottom:2px}
+.acard-notes{font-size:11px;color:#94a3b8;font-style:italic;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acard-meta{display:flex;gap:6px;align-items:center;margin-top:3px;flex-wrap:wrap}
+.acard-date{font-size:10px;color:#94a3b8;background:#f1f5f9;padding:1px 6px;border-radius:4px}
+.acard-right{display:flex;gap:5px;flex-shrink:0}
+.restore-btn{font-size:11px;padding:3px 9px;border-radius:6px;background:#e0f2fe;color:#0c4a6e;border:1px solid #bae6fd;cursor:pointer;font-weight:700}
+.restore-btn:hover{background:#bae6fd}
+.perm-del-btn{font-size:11px;padding:3px 9px;border-radius:6px;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;cursor:pointer;font-weight:700}
+.perm-del-btn:hover{background:#fca5a5}
+.stats-bar{display:flex;gap:10px;flex-wrap:wrap;flex-shrink:0}
+.stat-box{background:#fff;border:2px solid #e2e8f0;border-radius:10px;padding:10px 16px;text-align:center;min-width:100px}
+.stat-num{font-size:22px;font-weight:700;color:#1e3a8a}
+.stat-lbl{font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;margin-top:2px}
+</style>
+</head>
+<body>
+<div class="ws">
+  <div class="tab-bar">
+    <div class="tab active" id="tab-planner" onclick="setTab('planner')">📅 Planner</div>
+    <div class="tab" id="tab-clients" onclick="setTab('clients')">🏢 Clients (<span id="client-count">0</span>)</div>
+    <div class="tab" id="tab-archive" onclick="setTab('archive')">📦 Archive (<span id="archive-count">0</span>)</div>
+    <div class="tab-spacer"></div>
+    <div class="sync-bar">
+      <span class="sync-status" id="sync-status">Not synced</span>
+      <button class="btn" style="font-size:11px;padding:4px 10px" onclick="exportToSheets()" title="Save everything to Google Sheets">☁ Export</button>
+      <button class="btn" style="font-size:11px;padding:4px 10px" onclick="importFromSheets()" title="Load from Google Sheets">⬇ Import</button>
+    </div>
+  </div>
+  <div id="tab-content" style="flex:1;overflow:hidden;display:flex;flex-direction:column"></div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════════════════════
+//  ▼▼▼  PASTE YOUR GOOGLE APPS SCRIPT URL HERE  ▼▼▼
+// ════════════════════════════════════════════════════════════════════════
+const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbz2gjJe8udmHmIDpfJGoNuwQKW7f6fep3YSOaUAPdBinjBQlfPd_3F_b_saQnRr1etSyA/exec';
+// ════════════════════════════════════════════════════════════════════════
+//  After you deploy your Apps Script web app, paste the URL above.
+//  It will look like:
+//  https://script.google.com/macros/s/AKfycb.../exec
+//
+//  Then click "☁ Export" in the top bar to back up your data.
+//  Click "⬇ Import" to restore from Sheets.
+// ════════════════════════════════════════════════════════════════════════
+
+const SK='wsv6';
+const HOURS=[8,9,10,11,12,13,14,15,16,17];
+const HLBL=['8AM','9AM','10AM','11AM','12PM','1PM','2PM','3PM','4PM','5PM'];
+const WDAYS=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+const STAGES=['Reach out','Follow-up','Customer','Phone Call','Try Again','Close for now'];
+const RECUR_OPTIONS=['Daily','Every weekday','Weekly','Every 2 weeks','Monthly','1st Friday','Last Friday'];
+
+const BASE_COMPANIES=[
+{company:"Allied Universal",size:"~800k+",address:"700 S Flower St Suite 400, Los Angeles, CA 90017",contact:"",phone:"213-362-3650",website:"https://www.aus.com",focus:"Corporate, patrols, retail, events",email:"",stage:"Customer",notes:[]},
+{company:"Securitas",size:"~333k",address:"1055 Wilshire Blvd Ste 1501/1600, Los Angeles, CA 90017",contact:"",phone:"213-580-8825",website:"https://www.securitasinc.com",focus:"Corporate, govt, retail, patrol",email:"",stage:"Reach out",notes:[]},
+{company:"GardaWorld",size:"100k+",address:"1200 W 7th St Ste 300, Los Angeles, CA 90017",contact:"",phone:"213-330-1004",website:"https://www.garda.com",focus:"Corporate, residential, patrol, retail",email:"",stage:"Customer",notes:[]},
+{company:"Inter-Con Security",size:"10k+",address:"210 S De Lacey Ave, Pasadena, CA 91105",contact:"",phone:"626-535-2200",website:"https://icsecurity.com",focus:"Government, critical infrastructure, corporate",email:"inquiries@icsecurity.com",stage:"Reach out",notes:[{date:"2025-12-04",type:"Phone Call",note:"Transferred to ext 1085, no name. Left message."},{date:"2025-12-17",type:"Phone Call",note:"Told to email HR at hr@icsecurity.com"},{date:"2026-01-06",type:"",note:"Followed up with email to HR, cc'd Alejandro Herrera."},{date:"2026-02-03",type:"",note:"Reached Andrew. Alejandro asked me to email him my info."},{date:"2026-05-07",type:"",note:"Left Alejandro a voicemail."},{date:"2026-05-14",type:"",note:"Try Alejandro again. Maybe email or try Jose's contacts."}]},
+{company:"Prosegur Security",size:"150k+",address:"Los Angeles region",contact:"",phone:"",website:"https://www.prosegur.us",focus:"Corporate, retail, patrol",email:"contact.us@prosegur.com",stage:"Reach out",notes:[{date:"2025-12-03",type:"Phone Call",note:"Left message with HR."},{date:"2026-01-14",type:"Phone Call",note:"Called, left message with Recruiting."},{date:"2026-02-05",type:"",note:"Called HR again, left message. Also sent email."},{date:"2026-05-14",type:"",note:"Call again"}]},
+{company:"American Guard Services",size:"Large",address:"Carson/Gardena CA",contact:"",phone:"",website:"https://americanguardservices.com",focus:"Maritime, govt, commercial, patrol",email:"info@americanguardservices.com",stage:"Customer",notes:[{date:"",type:"",note:"CURRENT CUSTOMER"}]},
+{company:"American Global Security",size:">10",address:"LA regional",contact:"",phone:"",website:"https://americanglobalsecurity.com",focus:"Armed/unarmed, patrols, commercial",email:"info@agspatrol.com",stage:"Reach out",notes:[]},
+{company:"Citiguard",size:">10",address:"Los Angeles",contact:"",phone:"",website:"https://www.mysecurityguards.com",focus:"Commercial, residential, events",email:"info@citiguardinc.com",stage:"Phone Call",notes:[]},
+{company:"Guardian National Security",size:"51-200",address:"Los Angeles",contact:"",phone:"",website:"https://gnsguard.com",focus:"Patrols, retail, industrial",email:"",stage:"Reach out",notes:[{date:"2025-12-03",type:"Phone Call",note:"Spoke to someone - took my name. Would get back to me."},{date:"2026-01-15",type:"Phone Call",note:"Guy in charge said not interested."},{date:"",type:"",note:"Send advertisement in future. Do not call."}]},
+{company:"Code 4 Private Security",size:"11-50",address:"Los Angeles",contact:"",phone:"888-601-5311",website:"https://allcode4.com",focus:"Patrols, retail, commercial",email:"CA@allcode4.com",stage:"Reach out",notes:[]},
+{company:"CSD Patrol",size:">10",address:"Los Angeles",contact:"Brittany",phone:"See website",website:"https://csdpatrol.com",focus:"Patrols, schools, commercial",email:"",stage:"Reach out",notes:[{date:"2025-12-03",type:"Phone Call",note:"Brittany handles ordering. Seemed interested. Offered samples."},{date:"2026-01-07",type:"",note:"Brittany will consider us but not until mid-Feb 2026."},{date:"2026-02-19",type:"",note:"Called and left message. Followed up with email."},{date:"2026-03-26",type:"",note:"Follow up with Brittany"}]},
+{company:"Citywide Security",size:">50",address:"Los Angeles",contact:"Ronit B.",phone:"800-569-6007",website:"https://citywidesecuritycompany.com",focus:"Corporate, retail, govt",email:"contact@citywidesecuritycompany.com",stage:"Reach out",notes:[{date:"2025-12-09",type:"Phone Call",note:"Spoke to Ronit B. - 200 guards nationwide. She'll forward pricing."},{date:"2026-01-29",type:"",note:"Offered patch services and tactical pants $22.95."},{date:"2026-05-07",type:"",note:"Spoke to Ronit, resent contact info. Free shipping on $200+."}]},
+{company:"Centinela Hospital Med Ctr.",size:"50-100",address:"Inglewood, CA",contact:"Lawrence Lewis",phone:"310.680.1480",website:"primehealthcare.com",focus:"Hospital in-house security",email:"llewis5@primehealthcare.com",stage:"",notes:[{date:"2025-12-16",type:"",note:"Will review and submit to higher-ups."},{date:"2026-04-29",type:"",note:"Lawrence will send photo of shirt and pant for pricing."},{date:"2026-05-06",type:"",note:"Call/text Lawrence if no response about the quote."}]},
+{company:"Montano Security",size:"20+",address:"10880 Wilshire Blvd Ste 1101, Los Angeles CA",contact:"Ezequiel Montano",phone:"424-385-7445",website:"montanosecurity.com",focus:"Commercial",email:"info@montanosecurity.com",stage:"",notes:[{date:"2025-12-17",type:"",note:"Emailed asking for pricing on tactical pants. Sent pricing 12/20."},{date:"2026-04-29",type:"",note:"Texted Ezequiel our website."}]},
+{company:"Hawaiian Garden's Casino",size:"50+",address:"Customer #151",contact:"Jorge Magana",phone:"562-860-5887",website:"hgcasino.com",focus:"In-house casino security",email:"jmagana@hgcasino.com",stage:"",notes:[{date:"2026-01-15",type:"Phone Call",note:"Great call with Jorge. Uses Galls. Needs badge embroidery."},{date:"2026-05-07",type:"",note:"Call Jorge or email"}]},
+{company:"Diversified Protection Corp.",size:"",address:"Daniel Island SC",contact:"Ms. Sonia",phone:"843-410-5642 ext.102",website:"www.dpcsecurity.com",focus:"Commercial / Government",email:"",stage:"initial",notes:[{date:"2026-03-10",type:"",note:"Spoke to Mrs. Sonya. Uses Unipro. Sent email detailing our services."},{date:"2026-05-20",type:"",note:"Call Ms. Sonya if no response"}]},
+{company:"Absolute Security International",size:"50+",address:"5155 Irwindale Ave, Irwindale CA",contact:"Sunny",phone:"626-858-7188",website:"www.absolutesecurityintl.com",focus:"Mostly commercial",email:"",stage:"",notes:[{date:"2026-02-18",type:"",note:"Finally spoke to Sunny. Gave me his cell."},{date:"2026-04-29",type:"",note:"Left Sunny a message with receptionist."}]},
+{company:"Convergence Executive Protection",size:"10+",address:"Memphis TN",contact:"Tamika Young",phone:"901-504-5320",website:"",focus:"Commercial",email:"",stage:"",notes:[{date:"2026-02-24",type:"",note:"Tamika will check website and order when needed."},{date:"2026-04-02",type:"",note:"Check back in with Tamika"}]},
+{company:"Ameriguard Security Services",size:"",address:"5470 W. Spruce #102, Fresno CA",contact:"Lawrence Garcia",phone:"559-271-5984",website:"www.ameriguardsecurity.com",focus:"Commercial / Government",email:"",stage:"",notes:[{date:"2026-05-07",type:"",note:"Called, left message with secretary."},{date:"2026-05-21",type:"",note:"Reach back out to Lawrence."}]},
+{company:"St. Thomas Security",size:"10+",address:"",contact:"Mike Rizk",phone:"951-445-3110",website:"",focus:"Commercial. Previous customer 2022.",email:"",stage:"",notes:[{date:"2026-04-01",type:"",note:"Mike came in and is currently buying from us."}]},
+{company:"Strategic Security",size:"3,000+",address:"19 Bellemeade Ave, Smithtown NY",contact:"",phone:"1-888-772-7475",website:"https://www.sscctu.com/",focus:"",email:"info@sscctu.com",stage:"",notes:[]},
+{company:"Iris Protection Services",size:"",address:"10566 Knott Avenue, Stanton CA",contact:"",phone:"(310) 766-5927",website:"https://irisprotectionservices.com/",focus:"",email:"info@irisprotectionservices.com",stage:"",notes:[]},
+{company:"AUMAGA Inc.",size:"",address:"Carson CA",contact:"",phone:"424.454.3656",website:"https://www.aumagainc.com/",focus:"",email:"ops@aumagainc.com",stage:"",notes:[]},
+{company:"Valcor Security Group",size:"",address:"West Hollywood CA",contact:"",phone:"424-244-0943",website:"Valcorsecurity.com",focus:"",email:"office@valcorsecurity.com",stage:"",notes:[]},
+{company:"American Corporate Security",size:"",address:"340 Golden Shore Suite 100, Long Beach CA",contact:"",phone:"",website:"https://amcorpsec.com/",focus:"",email:"",stage:"",notes:[]}
+];
+
+// ── STATE ─────────────────────────────────────────────────────────────────────
+let S={
+  tab:'planner',
+  sections:[
+    {id:'s1',name:'Patches',style:'s-patches',cat:'Patches'},
+    {id:'s2',name:'Follow Up',style:'s-followup',cat:'Follow Up'},
+    {id:'s3',name:'Reach Out',style:'s-reachout',cat:'Reach Out'},
+    {id:'s4',name:'Samples',style:'s-samples',cat:'Samples'},
+    {id:'s5',name:'To Do',style:'s-todo',cat:'To Do'},
+    {id:'s6',name:'Other',style:'s-other',cat:'Other'}
+  ],
+  tasks:[],archived:[],events:[],recurRules:[],
+  weekOffset:0,
+  modal:null,calModal:null,recurModal:null,addClientModal:null,addToPlannerModal:null,
+  editId:null,
+  clients:null,
+  selClient:null,
+  clientSearch:'',clientFilter:'All',
+  archiveSearch:'',archiveFilter:'All'
+};
+
+function load(){
+  try{const d=localStorage.getItem(SK);if(d){const p=JSON.parse(d);['sections','tasks','archived','events','recurRules','clients'].forEach(k=>{if(p[k])S[k]=p[k];});}}catch(e){}
+  if(!S.clients)S.clients=BASE_COMPANIES.map(c=>({...c,notes:[...(c.notes||[])]}));
+  if(!S.archived)S.archived=[];
+  updateCounts();
+}
+function save(){
+  try{localStorage.setItem(SK,JSON.stringify({sections:S.sections,tasks:S.tasks,archived:S.archived,events:S.events,recurRules:S.recurRules,clients:S.clients}));}
+  catch(e){alert('Browser storage full — please Export to Sheets to free space.');}
+  updateCounts();
+}
+function updateCounts(){
+  const cc=document.getElementById('client-count');const ac=document.getElementById('archive-count');
+  if(cc)cc.textContent=S.clients?S.clients.length:0;
+  if(ac)ac.textContent=S.archived?S.archived.length:0;
+}
+
+// ── SHEETS SYNC ───────────────────────────────────────────────────────────────
+function setSyncStatus(msg,cls){
+  const el=document.getElementById('sync-status');
+  if(!el)return;
+  el.textContent=msg;
+  el.className='sync-status'+(cls?' '+cls:'');
+}
+
+async function exportToSheets(){
+  if(!SHEETS_URL){
+    alert('SHEETS_URL is empty.\n\nOpen this HTML file in a text editor, find the line:\n  const SHEETS_URL = \'\'\nand paste your Google Apps Script URL inside the quotes.\n\nSee the setup instructions in workspace_sheets_backup.gs');
+    return;
+  }
+  setSyncStatus('Exporting…');
+  try{
+    const res=await fetch(SHEETS_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tasks:S.tasks,archived:S.archived,events:S.events,clients:S.clients,recurRules:S.recurRules,sections:S.sections})});
+    const data=await res.json();
+    if(data.status==='ok'){
+      setSyncStatus('✓ Exported '+new Date().toLocaleTimeString(),'ok');
+    } else {
+      setSyncStatus('Export failed','err');
+      console.error(data);
+    }
+  }catch(e){
+    setSyncStatus('Export error — check URL','err');
+    console.error(e);
+  }
+}
+
+async function importFromSheets(){
+  if(!SHEETS_URL){
+    alert('SHEETS_URL is empty. See instructions above.');
+    return;
+  }
+  if(!confirm('Import from Sheets? This will overwrite your local data.'))return;
+  setSyncStatus('Importing…');
+  try{
+    const res=await fetch(SHEETS_URL+'?action=import');
+    const data=await res.json();
+    if(data.status==='ok'){
+      if(data.tasks)S.tasks=data.tasks;
+      if(data.archived)S.archived=data.archived;
+      if(data.events)S.events=data.events;
+      if(data.clients)S.clients=data.clients;
+      if(data.recurRules)S.recurRules=data.recurRules;
+      if(data.sections)S.sections=data.sections;
+      save();render();
+      setSyncStatus('✓ Imported '+new Date().toLocaleTimeString(),'ok');
+    }else{
+      setSyncStatus('Import failed','err');
+    }
+  }catch(e){
+    setSyncStatus('Import error','err');
+    console.error(e);
+  }
+}
+
+// ── CORE HELPERS ──────────────────────────────────────────────────────────────
+function fmtDate(d){return d.toISOString().slice(0,10);}
+function todayStr(){return fmtDate(new Date());}
+function getMonday(off){const d=new Date();const day=d.getDay();const m=new Date(d);m.setDate(d.getDate()-(day===0?6:day-1)+off*7);m.setHours(0,0,0,0);return m;}
+function weekDays(m){return Array.from({length:7},(_,i)=>{const d=new Date(m);d.setDate(m.getDate()+i);return d;});}
+function fmtShort(d){return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});}
+function evClass(cat){const m={'Patches':'ev-patches','Follow Up':'ev-followup','Reach Out':'ev-reachout','Samples':'ev-samples','To Do':'ev-todo','Other':'ev-other'};return m[cat]||'ev-custom';}
+function stageClass(s){if(!s)return 'sp-other';const sl=(s||'').toLowerCase();if(sl.includes('customer'))return 'sp-customer';if(sl.includes('reach'))return 'sp-reachout';if(sl.includes('follow'))return 'sp-followup';if(sl.includes('phone'))return 'sp-phonecall';return 'sp-other';}
+function secName(id){return(S.sections.find(s=>s.id===id)||{name:'—'}).name;}
+
+function generateRecurEvents(){
+  const today=new Date();today.setHours(0,0,0,0);
+  const horizon=new Date(today);horizon.setDate(today.getDate()+28);
+  S.recurRules.forEach(rule=>{
+    const existDates=new Set(S.events.filter(e=>e.recurId===rule.id).map(e=>e.date));
+    let d=new Date(today);
+    while(d<=horizon){
+      const ds=fmtDate(d);const dow=d.getDay();
+      let hit=false;
+      if(rule.freq==='Daily')hit=true;
+      else if(rule.freq==='Every weekday')hit=dow>=1&&dow<=5;
+      else if(rule.freq==='Weekly')hit=dow===new Date(rule.startDate+'T12:00:00').getDay();
+      else if(rule.freq==='Every 2 weeks'){const diff=Math.round((d-new Date(rule.startDate+'T12:00:00'))/(7*86400000));hit=dow===new Date(rule.startDate+'T12:00:00').getDay()&&diff%2===0&&diff>=0;}
+      else if(rule.freq==='Monthly')hit=d.getDate()===new Date(rule.startDate+'T12:00:00').getDate();
+      else if(rule.freq==='1st Friday')hit=dow===5&&d.getDate()<=7;
+      else if(rule.freq==='Last Friday'){if(dow===5){const nx=new Date(d);nx.setDate(d.getDate()+7);hit=nx.getMonth()!==d.getMonth();}}
+      if(hit&&!existDates.has(ds)){S.events.push({id:'re'+Date.now()+Math.random().toString(36).slice(2),recurId:rule.id,title:rule.title,cat:rule.cat,date:ds,hour:rule.hour,note:rule.note||''});existDates.add(ds);}
+      d.setDate(d.getDate()+1);
+    }
+  });
+}
+
+// ── RENDER ────────────────────────────────────────────────────────────────────
+function render(){
+  generateRecurEvents();
+  const tc=document.getElementById('tab-content');tc.innerHTML='';
+  if(S.tab==='planner')tc.innerHTML=renderPlanner();
+  else if(S.tab==='clients')tc.innerHTML=renderClients();
+  else tc.innerHTML=renderArchive();
+  ['planner','clients','archive'].forEach(t=>{const el=document.getElementById('tab-'+t);if(el)el.classList.toggle('active',S.tab===t);});
+  updateCounts();
+  if(S.modal)appendModal(buildTaskModal());
+  if(S.calModal)appendModal(buildCalModal());
+  if(S.recurModal)appendModal(buildRecurModal());
+  if(S.addClientModal)appendModal(buildAddClientModal());
+  if(S.addToPlannerModal)appendModal(buildAddToPlannerModal());
+  setTimeout(bindLiveInputs,50);
+}
+
+// ── PLANNER ───────────────────────────────────────────────────────────────────
+function renderPlanner(){
+  const m1=getMonday(S.weekOffset),m2=getMonday(S.weekOffset+1);
+  const d1=weekDays(m1),d2=weekDays(m2);
+  let sb='<div class="sb">';
+  S.sections.forEach(sec=>{
+    const active=S.tasks.filter(t=>t.secId===sec.id);
+    sb+=`<div class="sec-block ${sec.style||'s-other'}" ondragover="event.preventDefault()" ondrop="dropSec(event,'${sec.id}')">`;
+    sb+=`<div class="sec-hdr"><span class="sec-name" onclick="renSec('${sec.id}')">${sec.name}</span><button class="addbtn" onclick="openAdd('${sec.id}')">+</button></div>`;
+    if(!active.length)sb+=`<div class="no-tasks">No tasks</div>`;
+    active.forEach(t=>sb+=renderCard(t));
+    sb+=`</div>`;
+  });
+  sb+=`<div class="add-sec-btn" onclick="addSec()">+ Add section</div></div>`;
+  const main=`<div class="main">
+    <div class="top-bar">
+      <button class="cal-nav" onclick="prevW()">&#8249;</button>
+      <button class="cal-nav" onclick="nextW()">&#8250;</button>
+      <span class="wk-label">${fmtShort(m1)} – ${fmtShort(d2[6])}</span>
+      <div style="flex:1"></div>
+      <button class="btn" onclick="S.recurModal={};render()" style="font-size:12px">🔁 Recurring</button>
+      <button class="btn primary" onclick="openAdd(null)">+ Add task</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px">
+      <span class="wk-label">${fmtShort(m1)} – ${fmtShort(d1[6])}</span>
+      <span class="wk-tag wt-now">This week</span>
+    </div>
+    ${renderWeek(d1,false)}
+    <div style="display:flex;align-items:center;gap:6px;margin-top:10px">
+      <span class="wk-label" style="font-size:13px">${fmtShort(m2)} – ${fmtShort(d2[6])}</span>
+      <span class="wk-tag wt-next">Next week</span>
+    </div>
+    ${renderWeek(d2,true)}
+  </div>`;
+  return `<div class="planner-layout">${sb}${main}</div>`;
+}
+
+function renderCard(t){
+  const od=t.due&&t.due<todayStr();
+  return `<div class="tcard" draggable="true" ondragstart="dragStart(event,'${t.id}')" onclick="openEdit('${t.id}')">
+    <button class="del-tc" onclick="event.stopPropagation();delTask('${t.id}')">✕</button>
+    <div class="tcard-title">${t.name}</div>
+    ${t.notes?`<div class="tcard-notes">${t.notes.slice(0,90)}${t.notes.length>90?'…':''}</div>`:''}
+    <div class="tcard-meta">
+      <span class="badge b-${t.status||'normal'}">${t.status||'normal'}</span>
+      ${t.due?`<span class="${od?'b-overdue':'b-due'}">${od?'⚠ ':''}`+t.due+`</span>`:''}
+      <button class="done-btn" onclick="event.stopPropagation();archiveTask('${t.id}')">✓ Done</button>
+      <button class="gcal-btn" onclick="event.stopPropagation();gcalTask('${t.id}')">GCal</button>
+    </div>
+  </div>`;
+}
+
+function renderWeek(days,small){
+  const today=todayStr();
+  let h=`<div class="week-wrap"><div class="cgrid${small?' sg':''}">`;
+  h+=`<div class="th"><span style="font-size:9px;opacity:.5">TIME</span></div>`;
+  days.forEach(d=>{const isT=fmtDate(d)===today;h+=`<div class="th${isT?' tday':''}"><div class="dn">${d.getDate()}</div><div class="dd">${WDAYS[d.getDay()===0?6:d.getDay()-1]}</div></div>`;});
+  HOURS.forEach((hr,hi)=>{
+    h+=`<div class="time-h">${HLBL[hi]}</div>`;
+    days.forEach(d=>{
+      const ds=fmtDate(d),isT=ds===today;
+      const evs=S.events.filter(e=>e.date===ds&&e.hour===hr);
+      let inner=evs.map(ev=>`<div class="ev ${evClass(ev.cat||'Other')}"><div class="ev-row"><span class="ev-txt">${ev.title}</span><button class="ev-del" onclick="event.stopPropagation();delEv('${ev.id}')">×</button></div>${ev.note&&!small?`<div class="ev-note">${ev.note.slice(0,44)}</div>`:''}</div>`).join('');
+      h+=`<div class="cc${isT?' tday-col':''}" data-date="${ds}" data-hour="${hr}" onclick="calClick(this)">${inner}</div>`;
+    });
+  });
+  h+=`</div></div>`;return h;
+}
+
+// ── ARCHIVE ───────────────────────────────────────────────────────────────────
+function renderArchive(){
+  const q=(S.archiveSearch||'').toLowerCase();
+  let items=[...S.archived].reverse().filter(a=>{
+    const mQ=!q||a.name.toLowerCase().includes(q)||(a.notes||'').toLowerCase().includes(q);
+    const mF=S.archiveFilter==='All'||secName(a.secId)===S.archiveFilter;
+    return mQ&&mF;
+  });
+  const totalDone=S.archived.length;
+  const thisWeek=S.archived.filter(a=>{if(!a.archivedAt)return false;return(new Date()-new Date(a.archivedAt))<7*24*3600*1000;}).length;
+  const today=S.archived.filter(a=>a.archivedAt&&a.archivedAt.slice(0,10)===todayStr()).length;
+  const secFilters=['All',...S.sections.map(s=>s.name)];
+  const bySec={};
+  items.forEach(a=>{const sn=secName(a.secId);if(!bySec[sn])bySec[sn]=[];bySec[sn].push(a);});
+  let html=`<div class="archive-layout">
+    <div class="stats-bar">
+      <div class="stat-box"><div class="stat-num">${totalDone}</div><div class="stat-lbl">Total done</div></div>
+      <div class="stat-box"><div class="stat-num">${thisWeek}</div><div class="stat-lbl">This week</div></div>
+      <div class="stat-box"><div class="stat-num">${today}</div><div class="stat-lbl">Today</div></div>
+    </div>
+    <div class="archive-topbar">
+      <input class="archive-search" id="archive-search-input" placeholder="Search completed tasks..." value="${(S.archiveSearch||'').replace(/"/g,'&quot;')}"/>
+      <div style="display:flex;gap:5px;flex-wrap:wrap">${secFilters.map(f=>`<button class="cfilter${S.archiveFilter===f?' active':''}" onclick="S.archiveFilter='${f}';render()">${f}</button>`).join('')}</div>
+      ${S.archived.length?`<button class="btn" style="font-size:11px;color:#991b1b;border-color:#fca5a5;margin-left:auto" onclick="clearAllArchive()">🗑 Clear all</button>`:''}
+    </div>
+    <div class="archive-scroll">`;
+  if(!items.length){
+    html+=`<div style="text-align:center;padding:40px;color:#94a3b8;font-size:14px">📦<br><br>${S.archived.length?'No results match your search':'No completed tasks yet — mark tasks ✓ Done in the Planner'}</div>`;
+  }else{
+    Object.entries(bySec).forEach(([sn,tasks])=>{
+      html+=`<div class="archive-sec"><div class="archive-sec-hdr">${sn} <span style="font-weight:400;font-size:11px;opacity:.7">(${tasks.length})</span></div>`;
+      tasks.forEach(a=>{
+        html+=`<div class="acard">
+          <div class="acard-left">
+            <div class="acard-name">${a.name}</div>
+            ${a.notes?`<div class="acard-notes">${a.notes.slice(0,80)}</div>`:''}
+            <div class="acard-meta">
+              ${a.archivedAt?`<span class="acard-date">✓ ${a.archivedAt.slice(0,10)}</span>`:''}
+              ${a.due?`<span class="acard-date">Due: ${a.due}</span>`:''}
+            </div>
+          </div>
+          <div class="acard-right">
+            <button class="restore-btn" onclick="restoreTask('${a.id}')">↩ Restore</button>
+            <button class="perm-del-btn" onclick="permDelete('${a.id}')">✕</button>
+          </div>
+        </div>`;
+      });
+      html+=`</div>`;
+    });
+  }
+  html+=`</div></div>`;return html;
+}
+
+// ── CLIENTS ───────────────────────────────────────────────────────────────────
+function renderClients(){
+  const q=(S.clientSearch||'').toLowerCase();
+  const filtered=S.clients.filter(c=>{
+    const mQ=!q||c.company.toLowerCase().includes(q)||(c.contact||'').toLowerCase().includes(q)||(c.address||'').toLowerCase().includes(q);
+    const mF=S.clientFilter==='All'||(S.clientFilter==='Has Notes'&&c.notes&&c.notes.length>0)||c.stage===S.clientFilter;
+    return mQ&&mF;
+  });
+  const sel=S.selClient!==null?S.clients[S.selClient]:null;
+  let list=`<div class="clist">
+    <div class="clist-top">
+      <div class="clist-top-label"><span>Companies (${filtered.length}/${S.clients.length})</span><button class="btn" style="font-size:11px;padding:3px 9px" onclick="S.addClientModal={};render()">+ Add</button></div>
+      <input class="csearch" id="csearch-input" placeholder="Search company, contact..." value="${(S.clientSearch||'').replace(/"/g,'&quot;')}"/>
+      <div class="cfilters">${['All','Customer','Reach out','Follow-up','Has Notes'].map(f=>`<button class="cfilter${S.clientFilter===f?' active':''}" onclick="filterC('${f}')">${f}</button>`).join('')}</div>
+    </div>
+    <div class="clist-scroll" id="clist-scroll">`;
+  filtered.forEach(c=>{
+    const ri=S.clients.indexOf(c);const ln=c.notes&&c.notes.length?c.notes[c.notes.length-1]:null;
+    list+=`<div class="crow${S.selClient===ri?' sel':''}" onclick="selC(${ri})">
+      <div class="crow-name">${c.company}</div>
+      <div class="crow-meta">${c.stage?`<span class="stage-pill ${stageClass(c.stage)}">${c.stage}</span> `:''}<span style="color:#94a3b8;font-size:11px">${c.contact?c.contact.split('/')[0].trim().slice(0,22):''}</span></div>
+      ${ln&&ln.note?`<div class="crow-snip">${ln.note.slice(0,55)}…</div>`:''}
+    </div>`;
+  });
+  list+=`</div></div>`;
+  let detail='';
+  if(sel){
+    const idx=S.selClient;
+    const ws=sel.website?(sel.website.startsWith('http')?sel.website:'https://'+sel.website):'';
+    detail=`<div class="cdetail" id="cdetail">
+      <div class="cd-header">
+        <div class="cd-name">${sel.company}</div>
+        ${sel.stage?`<span class="stage-pill ${stageClass(sel.stage)}" style="font-size:12px;padding:3px 10px">${sel.stage}</span>`:''}
+        <div class="cd-actions">
+          <button class="cd-task-btn green" onclick="S.addToPlannerModal={clientIdx:${idx}};render()">📅 Add to Planner + Calendar</button>
+          ${ws?`<a href="${ws}" target="_blank" style="padding:7px 12px;background:#f0f4ff;border:2px solid #1e3a8a;border-radius:8px;color:#1e3a8a;text-decoration:none;font-size:12px;font-weight:700">🌐 Website</a>`:''}
+        </div>
+      </div>
+      <div class="cd-body">
+        <div class="cd-info-grid">
+          ${sel.phone?`<div><div class="cd-info-label">📞 Phone</div><div class="cd-info-val">${sel.phone}</div></div>`:''}
+          ${sel.email?`<div><div class="cd-info-label">✉ Email</div><div class="cd-info-val" style="font-size:12px">${sel.email}</div></div>`:''}
+          ${sel.address?`<div><div class="cd-info-label">📍 Address</div><div class="cd-info-val">${sel.address}</div></div>`:''}
+          ${sel.contact?`<div><div class="cd-info-label">👤 Contact</div><div class="cd-info-val">${sel.contact}</div></div>`:''}
+          ${sel.size?`<div><div class="cd-info-label">👥 Size</div><div class="cd-info-val">${sel.size}</div></div>`:''}
+          ${ws?`<div style="grid-column:1/-1"><div class="cd-info-label">🌐 Website</div><div class="cd-info-val"><a href="${ws}" target="_blank" style="color:#1e3a8a">${sel.website}</a></div></div>`:''}
+          ${sel.focus?`<div style="grid-column:1/-1"><div class="cd-info-label">🏷 Focus</div><div class="cd-info-val">${sel.focus}</div></div>`:''}
+        </div>
+        <div class="notes-section">
+          <div class="notes-header">📋 Activity history (${sel.notes?sel.notes.length:0})</div>
+          ${sel.notes&&sel.notes.length?sel.notes.map(n=>`<div class="note-row"><div class="note-date">${n.date||'—'}</div>${n.type?`<span class="note-type-badge">${n.type}</span>`:'<span style="width:2px"></span>'}<div class="note-text">${n.note}</div></div>`).join(''):'<div style="padding:12px;color:#94a3b8;font-size:13px">No history yet</div>'}
+        </div>
+        <div class="add-note-section">
+          <div class="add-note-header">✏ Add new note</div>
+          <div class="add-note-body">
+            <div style="display:flex;gap:8px;margin-bottom:9px;flex-wrap:wrap">
+              <input type="date" id="note-date" value="${todayStr()}" class="ani" style="flex:1;min-width:130px"/>
+              <select id="note-type" class="ani" style="flex:1;min-width:120px"><option>Phone Call</option><option>Email</option><option>Visit</option><option>Follow Up</option><option>Note</option></select>
+            </div>
+            <textarea id="note-text" class="anita" placeholder="What happened? Next steps?"></textarea>
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+              <select id="note-stage" class="ani"><option value="">Keep stage${sel.stage?' ('+sel.stage+')':''}</option>${STAGES.map(s=>`<option value="${s}">${s}</option>`).join('')}</select>
+              <button class="cd-task-btn" onclick="saveNote(${idx})">💾 Save note</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }else{
+    detail=`<div class="cdetail-empty"><div style="text-align:center"><div style="font-size:48px;margin-bottom:10px;opacity:.2">🏢</div><div style="font-size:15px;font-weight:700">Select a company</div><div style="font-size:12px;margin-top:4px;color:#94a3b8">${S.clients.length} companies loaded</div></div></div>`;
+  }
+  return `<div class="clients-layout">${list}${detail}</div>`;
+}
+
+// ── MODALS ────────────────────────────────────────────────────────────────────
+function appendModal(html){
+  const div=document.createElement('div');div.className='moverlay';
+  div.onclick=e=>{if(e.target===div)closeAllModals();};
+  div.innerHTML=html;document.body.appendChild(div);
+  setTimeout(()=>{const f=div.querySelector('input,textarea');if(f)f.focus();},40);
+}
+function closeAllModals(){S.modal=S.calModal=S.recurModal=S.addClientModal=S.addToPlannerModal=null;render();}
+
+function buildTaskModal(){
+  const t=S.editId?S.tasks.find(x=>x.id===S.editId):null;
+  const secOpts=S.sections.map(s=>`<option value="${s.id}"${(t?t.secId:S.modal?.secId)===s.id?' selected':''}>${s.name}</option>`).join('');
+  return `<div class="mbox" onclick="event.stopPropagation()">
+    <h3>${t?'✏ Edit task':'+ New task'}</h3>
+    <div class="mfield"><label>Task name</label><input id="m-name" value="${t?t.name.replace(/"/g,'&quot;'):''}" placeholder="e.g. Green Knight – polo approval"/></div>
+    <div class="mrow">
+      <div class="mfield"><label>Section</label><select id="m-sec">${secOpts}</select></div>
+      <div class="mfield"><label>Status</label><select id="m-stat"><option value="normal"${!t||t.status==='normal'?' selected':''}>Normal</option><option value="urgent"${t&&t.status==='urgent'?' selected':''}>Urgent</option></select></div>
+    </div>
+    <div class="mrow">
+      <div class="mfield"><label>Due date</label><input id="m-due" type="date" value="${t&&t.due?t.due:''}"/></div>
+      <div class="mfield"><label>Calendar time</label><select id="m-hr">${HOURS.map((h,i)=>`<option value="${h}">${HLBL[i]}</option>`).join('')}</select></div>
+    </div>
+    <div class="mfield"><label>Notes</label><textarea id="m-notes" placeholder="Client name, details, next step...">${t&&t.notes?t.notes:''}</textarea></div>
+    <div class="modal-btns">
+      <button class="btn" onclick="closeAllModals()">Cancel</button>
+      ${t?`<button class="btn" style="color:#065f46;border-color:#6ee7b7" onclick="archiveTask('${t.id}');closeAllModals()">✓ Mark Done</button>`:''}
+      ${t?`<button class="btn" style="color:#991b1b;border-color:#fca5a5" onclick="delTask('${t.id}');closeAllModals()">Delete</button>`:''}
+      <button class="btn primary" onclick="saveTask()">💾 Save</button>
+    </div>
+  </div>`;
+}
+
+function buildCalModal(){
+  const cm=S.calModal;
+  const catOpts=S.sections.map(s=>`<option value="${s.cat||s.name}">${s.name}</option>`).join('');
+  return `<div class="mbox" onclick="event.stopPropagation()">
+    <h3>📅 Add calendar block</h3>
+    <div class="mfield"><label>Title</label><input id="ce-title" placeholder="e.g. Follow up – Green Knight"/></div>
+    <div class="mrow">
+      <div class="mfield"><label>Category</label><select id="ce-cat">${catOpts}</select></div>
+      <div class="mfield"><label>Time</label><select id="ce-hr">${HOURS.map((h,i)=>`<option value="${h}"${h===cm.hour?' selected':''}>${HLBL[i]}</option>`).join('')}</select></div>
+    </div>
+    <div class="mfield"><label>Date</label><input id="ce-date" type="date" value="${cm.date}"/></div>
+    <div class="mfield"><label>Note (shows on calendar)</label><input id="ce-note" placeholder="Brief detail..."/></div>
+    <div class="modal-btns">
+      <button class="btn" onclick="closeAllModals()">Cancel</button>
+      <button class="btn primary" onclick="saveCalEv()">💾 Save</button>
+    </div>
+  </div>`;
+}
+
+function buildRecurModal(){
+  const catOpts=S.sections.map(s=>`<option value="${s.cat||s.name}">${s.name}</option>`).join('');
+  const existing=S.recurRules.map(r=>`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #e2e8f0"><div style="flex:1"><div style="font-size:13px;font-weight:700">${r.title}</div><div style="font-size:11px;color:#64748b">${r.freq} · ${r.cat} · ${r.hour>=12?(r.hour===12?12:r.hour-12)+'PM':r.hour+'AM'}</div></div><button class="btn" style="font-size:10px;padding:2px 7px;color:#c00;border-color:#fca5a5" onclick="delRecur('${r.id}')">Del</button></div>`).join('');
+  return `<div class="mbox" onclick="event.stopPropagation()" style="width:460px">
+    <h3>🔁 Recurring tasks</h3>
+    ${existing||'<div style="font-size:13px;color:#94a3b8;margin-bottom:10px">No recurring tasks yet</div>'}
+    <div style="border-top:2px solid #e8eef8;margin:12px 0 10px;font-weight:700;font-size:13px;padding-top:12px">Add new</div>
+    <div class="mfield"><label>Title</label><input id="r-title" placeholder="e.g. Pay vendor, Weekly check-in"/></div>
+    <div class="mrow">
+      <div class="mfield"><label>Frequency</label><select id="r-freq">${RECUR_OPTIONS.map(o=>`<option>${o}</option>`).join('')}</select></div>
+      <div class="mfield"><label>Start date</label><input id="r-start" type="date" value="${todayStr()}"/></div>
+    </div>
+    <div class="mrow">
+      <div class="mfield"><label>Category</label><select id="r-cat">${catOpts}</select></div>
+      <div class="mfield"><label>Time</label><select id="r-hr">${HOURS.map((h,i)=>`<option value="${h}">${HLBL[i]}</option>`).join('')}</select></div>
+    </div>
+    <div class="mfield"><label>Note</label><input id="r-note" placeholder="Brief description..."/></div>
+    <div class="modal-btns">
+      <button class="btn" onclick="closeAllModals()">Close</button>
+      <button class="btn primary" onclick="saveRecur()">+ Add rule</button>
+    </div>
+  </div>`;
+}
+
+function buildAddClientModal(){
+  return `<div class="mbox" onclick="event.stopPropagation()" style="width:460px">
+    <h3>🏢 Add new company</h3>
+    <div class="mrow">
+      <div class="mfield"><label>Company name *</label><input id="ac-name" placeholder="Acme Security"/></div>
+      <div class="mfield"><label>Stage</label><select id="ac-stage"><option value="">— none —</option>${STAGES.map(s=>`<option>${s}</option>`).join('')}</select></div>
+    </div>
+    <div class="mrow">
+      <div class="mfield"><label>Contact</label><input id="ac-contact" placeholder="Jane Smith"/></div>
+      <div class="mfield"><label>Phone</label><input id="ac-phone" placeholder="555-000-0000"/></div>
+    </div>
+    <div class="mfield"><label>Email</label><input id="ac-email" placeholder="contact@company.com"/></div>
+    <div class="mfield"><label>Website</label><input id="ac-web" placeholder="https://..."/></div>
+    <div class="mfield"><label>Address</label><input id="ac-addr" placeholder="City, State"/></div>
+    <div class="mfield"><label>Focus</label><input id="ac-focus" placeholder="e.g. Corporate, retail"/></div>
+    <div class="mfield"><label>Size</label><input id="ac-size" placeholder="e.g. 50+ guards"/></div>
+    <div class="modal-btns">
+      <button class="btn" onclick="closeAllModals()">Cancel</button>
+      <button class="btn primary" onclick="saveNewClient()">+ Add company</button>
+    </div>
+  </div>`;
+}
+
+function buildAddToPlannerModal(){
+  const m=S.addToPlannerModal;const c=S.clients[m.clientIdx];
+  const secOpts=S.sections.map(s=>`<option value="${s.id}"${s.name==='Reach Out'?' selected':''}>${s.name}</option>`).join('');
+  return `<div class="mbox" onclick="event.stopPropagation()">
+    <h3>📅 Add to Planner + Calendar</h3>
+    <div style="font-size:14px;font-weight:700;color:#1e3a8a;margin-bottom:12px">${c.company}</div>
+    <div class="mfield"><label>Task name</label><input id="atp-name" value="${c.company.replace(/"/g,'&quot;')}"/></div>
+    <div class="mrow">
+      <div class="mfield"><label>Section</label><select id="atp-sec">${secOpts}</select></div>
+      <div class="mfield"><label>Status</label><select id="atp-stat"><option value="normal">Normal</option><option value="urgent">Urgent</option></select></div>
+    </div>
+    <div class="mrow">
+      <div class="mfield"><label>Due date</label><input id="atp-due" type="date" value="${todayStr()}"/></div>
+      <div class="mfield"><label>Calendar time</label><select id="atp-hr">${HOURS.map((h,i)=>`<option value="${h}">${HLBL[i]}</option>`).join('')}</select></div>
+    </div>
+    <div class="mfield"><label>Notes</label><textarea id="atp-notes" placeholder="What needs to happen?">${c.notes&&c.notes.length?c.notes[c.notes.length-1].note.slice(0,100):''}</textarea></div>
+    <div class="modal-btns">
+      <button class="btn" onclick="closeAllModals()">Cancel</button>
+      <button class="btn primary" onclick="saveAddToPlanner(${m.clientIdx})">📅 Add to Planner + Calendar</button>
+    </div>
+  </div>`;
+}
+
+// ── ACTIONS ───────────────────────────────────────────────────────────────────
+let dragId=null;
+function dragStart(e,id){dragId=id;}
+function dropSec(e,sid){e.preventDefault();if(!dragId)return;const t=S.tasks.find(x=>x.id===dragId);if(t){t.secId=sid;save();}dragId=null;render();}
+function calClick(el){S.calModal={date:el.dataset.date,hour:parseInt(el.dataset.hour)};render();}
+function delEv(id){S.events=S.events.filter(e=>e.id!==id);save();render();}
+function prevW(){S.weekOffset--;render();}function nextW(){S.weekOffset++;render();}
+function setTab(t){S.tab=t;render();}
+function filterC(f){S.clientFilter=f;render();}
+function selC(i){S.selClient=i;render();}
+function openAdd(sid){S.modal={mode:'add',secId:sid||S.sections[0]?.id};S.editId=null;render();}
+function openEdit(id){S.modal={mode:'edit'};S.editId=id;render();}
+function archiveTask(id){const t=S.tasks.find(x=>x.id===id);if(!t)return;S.archived.push({...t,archivedAt:new Date().toISOString()});S.tasks=S.tasks.filter(x=>x.id!==id);save();render();}
+function restoreTask(id){const a=S.archived.find(x=>x.id===id);if(!a)return;const{archivedAt,...t}=a;S.tasks.push(t);S.archived=S.archived.filter(x=>x.id!==id);save();S.tab='planner';render();}
+function permDelete(id){S.archived=S.archived.filter(x=>x.id!==id);save();render();}
+function clearAllArchive(){if(confirm('Permanently delete all archived tasks?')){S.archived=[];save();render();}}
+function delTask(id){S.tasks=S.tasks.filter(t=>t.id!==id);save();}
+function renSec(id){const s=S.sections.find(x=>x.id===id);if(!s)return;const n=prompt('Rename section:',s.name);if(n){s.name=n.trim();save();render();}}
+function addSec(){const n=prompt('New section name:');if(!n)return;S.sections.push({id:'s'+Date.now(),name:n.trim(),style:'s-custom',cat:n.trim()});save();render();}
+function gcalTask(id){const t=S.tasks.find(x=>x.id===id);if(!t)return;const d=(t.due||todayStr()).replace(/-/g,'');window.open(`https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(t.name)}&dates=${d}/${d}&details=${encodeURIComponent(t.notes||'')}`);}
+
+function saveTask(){
+  const name=(document.getElementById('m-name').value||'').trim();if(!name)return;
+  const secId=document.getElementById('m-sec').value;const status=document.getElementById('m-stat').value;
+  const due=document.getElementById('m-due').value;const notes=document.getElementById('m-notes').value;
+  const hr=parseInt(document.getElementById('m-hr').value);
+  const sec=S.sections.find(s=>s.id===secId);const cat=sec?sec.cat||sec.name:'Other';
+  if(S.editId){
+    const t=S.tasks.find(x=>x.id===S.editId);if(t){Object.assign(t,{name,secId,status,due,notes});const ev=S.events.find(e=>e.taskId===t.id);if(ev&&due){ev.title=name;ev.cat=cat;ev.date=due;ev.note=notes.slice(0,60);}}
+  }else{
+    const id='t'+Date.now();S.tasks.push({id,name,secId,status,due,notes});
+    if(due)S.events.push({id:'e'+Date.now(),taskId:id,title:name,cat,date:due,hour:hr,note:notes.slice(0,60)});
+  }
+  save();S.modal=null;S.editId=null;render();
+}
+function saveCalEv(){
+  const title=(document.getElementById('ce-title').value||'').trim();if(!title)return;
+  S.events.push({id:'e'+Date.now(),title,cat:document.getElementById('ce-cat').value,date:document.getElementById('ce-date').value,hour:parseInt(document.getElementById('ce-hr').value),note:document.getElementById('ce-note').value});
+  save();S.calModal=null;render();
+}
+function saveRecur(){
+  const title=(document.getElementById('r-title').value||'').trim();if(!title)return;
+  S.recurRules.push({id:'rr'+Date.now(),title,freq:document.getElementById('r-freq').value,startDate:document.getElementById('r-start').value,cat:document.getElementById('r-cat').value,hour:parseInt(document.getElementById('r-hr').value),note:document.getElementById('r-note').value});
+  save();render();
+}
+function delRecur(id){S.recurRules=S.recurRules.filter(r=>r.id!==id);S.events=S.events.filter(e=>e.recurId!==id);save();render();}
+function saveNewClient(){
+  const name=(document.getElementById('ac-name').value||'').trim();if(!name)return;
+  S.clients.push({company:name,size:document.getElementById('ac-size').value,address:document.getElementById('ac-addr').value,contact:document.getElementById('ac-contact').value,phone:document.getElementById('ac-phone').value,website:document.getElementById('ac-web').value,focus:document.getElementById('ac-focus').value,email:document.getElementById('ac-email').value,stage:document.getElementById('ac-stage').value,notes:[]});
+  save();S.addClientModal=null;S.selClient=S.clients.length-1;S.tab='clients';render();
+}
+function saveAddToPlanner(idx){
+  const name=(document.getElementById('atp-name').value||'').trim();if(!name)return;
+  const secId=document.getElementById('atp-sec').value;const status=document.getElementById('atp-stat').value;
+  const due=document.getElementById('atp-due').value;const notes=document.getElementById('atp-notes').value;
+  const hr=parseInt(document.getElementById('atp-hr').value);
+  const sec=S.sections.find(s=>s.id===secId);const cat=sec?sec.cat||sec.name:'Other';
+  const id='t'+Date.now();
+  S.tasks.push({id,name,secId,status,due,notes,clientIdx:idx});
+  if(due)S.events.push({id:'e'+Date.now(),taskId:id,title:name,cat,date:due,hour:hr,note:notes.slice(0,60)});
+  save();S.addToPlannerModal=null;S.tab='planner';render();
+}
+function saveNote(idx){
+  const text=(document.getElementById('note-text').value||'').trim();if(!text)return;
+  const date=document.getElementById('note-date').value;const type=document.getElementById('note-type').value;
+  const stage=document.getElementById('note-stage').value;
+  if(!S.clients[idx].notes)S.clients[idx].notes=[];
+  S.clients[idx].notes.push({date,type,note:text});
+  if(stage)S.clients[idx].stage=stage;
+  const sec=S.sections.find(s=>s.name==='Reach Out')||S.sections[0];
+  const id='t'+Date.now();
+  S.tasks.push({id,name:S.clients[idx].company,secId:sec.id,status:'normal',due:date,notes:text.slice(0,120),clientIdx:idx});
+  if(date)S.events.push({id:'ev'+Date.now(),taskId:id,title:S.clients[idx].company,cat:sec.cat||'Reach Out',date,hour:9,note:text.slice(0,60)});
+  save();render();
+}
+
+function bindLiveInputs(){
+  const cs=document.getElementById('csearch-input');
+  if(cs)cs.addEventListener('input',function(){
+    S.clientSearch=this.value;
+    const q=S.clientSearch.toLowerCase();
+    const filtered=S.clients.filter(c=>{
+      const mQ=!q||c.company.toLowerCase().includes(q)||(c.contact||'').toLowerCase().includes(q)||(c.address||'').toLowerCase().includes(q);
+      const mF=S.clientFilter==='All'||(S.clientFilter==='Has Notes'&&c.notes&&c.notes.length>0)||c.stage===S.clientFilter;
+      return mQ&&mF;
+    });
+    const scroll=document.getElementById('clist-scroll');const lbl=document.querySelector('.clist-top-label span');
+    if(lbl)lbl.textContent=`Companies (${filtered.length}/${S.clients.length})`;
+    if(scroll)scroll.innerHTML=filtered.map(c=>{
+      const ri=S.clients.indexOf(c);const ln=c.notes&&c.notes.length?c.notes[c.notes.length-1]:null;
+      return `<div class="crow${S.selClient===ri?' sel':''}" onclick="selC(${ri})"><div class="crow-name">${c.company}</div><div class="crow-meta">${c.stage?`<span class="stage-pill ${stageClass(c.stage)}">${c.stage}</span> `:''}<span style="color:#94a3b8;font-size:11px">${c.contact?c.contact.split('/')[0].trim().slice(0,22):''}</span></div>${ln&&ln.note?`<div class="crow-snip">${ln.note.slice(0,55)}…</div>`:''}</div>`;
+    }).join('');
+  });
+  const as=document.getElementById('archive-search-input');
+  if(as)as.addEventListener('input',function(){S.archiveSearch=this.value;render();});
+}
+
+load();render();
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.querySelector('.moverlay'))closeAllModals();});
+</script>
+</body>
+</html>
