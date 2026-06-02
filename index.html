@@ -188,6 +188,7 @@ html,body{height:100%;overflow:hidden;background:#f1f5f9}
     <div class="tab-spacer"></div>
     <div class="sync-bar">
       <span class="sync-status" id="sync-status">Auto-saves to Sheets after changes</span>
+      <button class="btn" style="font-size:11px;padding:4px 10px" onclick="showEmailSetup()" title="Set up daily email reminders">📧 Email setup</button>
       <button class="btn" style="font-size:11px;padding:4px 10px" onclick="exportToSheets(false)" title="Save to Google Sheets now">☁ Save now</button>
       <button class="btn" style="font-size:11px;padding:4px 10px" onclick="importFromSheets()" title="Load from Google Sheets">⬇ Import</button>
     </div>
@@ -199,7 +200,7 @@ html,body{height:100%;overflow:hidden;background:#f1f5f9}
 // ════════════════════════════════════════════════════════════════════════
 //  ▼▼▼  PASTE YOUR GOOGLE APPS SCRIPT URL HERE  ▼▼▼
 // ════════════════════════════════════════════════════════════════════════
-const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbzBvTr1nXLHMSzI07xpyAcEyN6u0Mk63h3l9NDOrDVGLkCmy28wObL0r-YGzvOhQvHNhQ/exec';  // ← your Apps Script URL
+const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbwb-ATibBeQuvdEkgAxjURivGznnzzwAL59YgQAsp-Lb1EoykdlQ91w1LIbcUk2SisvGQ/exec';  // ← your Apps Script URL
 // ════════════════════════════════════════════════════════════════════════
 //  ▼▼▼  GOOGLE DRIVE FOLDER ID FOR FILE UPLOADS  ▼▼▼
 //  1. Create a folder in Google Drive e.g. "IUS Workspace Files"
@@ -217,31 +218,97 @@ const STAGES=['Reach out','Follow-up','Customer','Phone Call','Try Again','Close
 const RECUR_OPTIONS=['Daily','Every weekday','Weekly','Every 2 weeks','Monthly','1st Friday','Last Friday'];
 
 const BASE_COMPANIES=[
-{company:"Allied Universal",size:"~800k+",address:"700 S Flower St Suite 400, Los Angeles, CA 90017",contact:"",phone:"213-362-3650",website:"https://www.aus.com",focus:"Corporate, patrols, retail, events",email:"",stage:"Customer",notes:[]},
-{company:"Securitas",size:"~333k",address:"1055 Wilshire Blvd Ste 1501/1600, Los Angeles, CA 90017",contact:"",phone:"213-580-8825",website:"https://www.securitasinc.com",focus:"Corporate, govt, retail, patrol",email:"",stage:"Reach out",notes:[]},
-{company:"GardaWorld",size:"100k+",address:"1200 W 7th St Ste 300, Los Angeles, CA 90017",contact:"",phone:"213-330-1004",website:"https://www.garda.com",focus:"Corporate, residential, patrol, retail",email:"",stage:"Customer",notes:[]},
-{company:"Inter-Con Security",size:"10k+",address:"210 S De Lacey Ave, Pasadena, CA 91105",contact:"",phone:"626-535-2200",website:"https://icsecurity.com",focus:"Government, critical infrastructure, corporate",email:"inquiries@icsecurity.com",stage:"Reach out",notes:[{date:"2025-12-04",type:"Phone Call",note:"Transferred to ext 1085, no name. Left message."},{date:"2025-12-17",type:"Phone Call",note:"Told to email HR at hr@icsecurity.com"},{date:"2026-01-06",type:"",note:"Followed up with email to HR, cc'd Alejandro Herrera."},{date:"2026-02-03",type:"",note:"Reached Andrew. Alejandro asked me to email him my info."},{date:"2026-05-07",type:"",note:"Left Alejandro a voicemail."},{date:"2026-05-14",type:"",note:"Try Alejandro again. Maybe email or try Jose's contacts."}]},
-{company:"Prosegur Security",size:"150k+",address:"Los Angeles region",contact:"",phone:"",website:"https://www.prosegur.us",focus:"Corporate, retail, patrol",email:"contact.us@prosegur.com",stage:"Reach out",notes:[{date:"2025-12-03",type:"Phone Call",note:"Left message with HR."},{date:"2026-01-14",type:"Phone Call",note:"Called, left message with Recruiting."},{date:"2026-02-05",type:"",note:"Called HR again, left message. Also sent email."},{date:"2026-05-14",type:"",note:"Call again"}]},
-{company:"American Guard Services",size:"Large",address:"Carson/Gardena CA",contact:"",phone:"",website:"https://americanguardservices.com",focus:"Maritime, govt, commercial, patrol",email:"info@americanguardservices.com",stage:"Customer",notes:[{date:"",type:"",note:"CURRENT CUSTOMER"}]},
-{company:"American Global Security",size:">10",address:"LA regional",contact:"",phone:"",website:"https://americanglobalsecurity.com",focus:"Armed/unarmed, patrols, commercial",email:"info@agspatrol.com",stage:"Reach out",notes:[]},
-{company:"Citiguard",size:">10",address:"Los Angeles",contact:"",phone:"",website:"https://www.mysecurityguards.com",focus:"Commercial, residential, events",email:"info@citiguardinc.com",stage:"Phone Call",notes:[]},
-{company:"Guardian National Security",size:"51-200",address:"Los Angeles",contact:"",phone:"",website:"https://gnsguard.com",focus:"Patrols, retail, industrial",email:"",stage:"Reach out",notes:[{date:"2025-12-03",type:"Phone Call",note:"Spoke to someone - took my name. Would get back to me."},{date:"2026-01-15",type:"Phone Call",note:"Guy in charge said not interested."},{date:"",type:"",note:"Send advertisement in future. Do not call."}]},
-{company:"Code 4 Private Security",size:"11-50",address:"Los Angeles",contact:"",phone:"888-601-5311",website:"https://allcode4.com",focus:"Patrols, retail, commercial",email:"CA@allcode4.com",stage:"Reach out",notes:[]},
-{company:"CSD Patrol",size:">10",address:"Los Angeles",contact:"Brittany",phone:"See website",website:"https://csdpatrol.com",focus:"Patrols, schools, commercial",email:"",stage:"Reach out",notes:[{date:"2025-12-03",type:"Phone Call",note:"Brittany handles ordering. Seemed interested. Offered samples."},{date:"2026-01-07",type:"",note:"Brittany will consider us but not until mid-Feb 2026."},{date:"2026-02-19",type:"",note:"Called and left message. Followed up with email."},{date:"2026-03-26",type:"",note:"Follow up with Brittany"}]},
-{company:"Citywide Security",size:">50",address:"Los Angeles",contact:"Ronit B.",phone:"800-569-6007",website:"https://citywidesecuritycompany.com",focus:"Corporate, retail, govt",email:"contact@citywidesecuritycompany.com",stage:"Reach out",notes:[{date:"2025-12-09",type:"Phone Call",note:"Spoke to Ronit B. - 200 guards nationwide. She'll forward pricing."},{date:"2026-01-29",type:"",note:"Offered patch services and tactical pants $22.95."},{date:"2026-05-07",type:"",note:"Spoke to Ronit, resent contact info. Free shipping on $200+."}]},
-{company:"Centinela Hospital Med Ctr.",size:"50-100",address:"Inglewood, CA",contact:"Lawrence Lewis",phone:"310.680.1480",website:"primehealthcare.com",focus:"Hospital in-house security",email:"llewis5@primehealthcare.com",stage:"",notes:[{date:"2025-12-16",type:"",note:"Will review and submit to higher-ups."},{date:"2026-04-29",type:"",note:"Lawrence will send photo of shirt and pant for pricing."},{date:"2026-05-06",type:"",note:"Call/text Lawrence if no response about the quote."}]},
-{company:"Montano Security",size:"20+",address:"10880 Wilshire Blvd Ste 1101, Los Angeles CA",contact:"Ezequiel Montano",phone:"424-385-7445",website:"montanosecurity.com",focus:"Commercial",email:"info@montanosecurity.com",stage:"",notes:[{date:"2025-12-17",type:"",note:"Emailed asking for pricing on tactical pants. Sent pricing 12/20."},{date:"2026-04-29",type:"",note:"Texted Ezequiel our website."}]},
-{company:"Hawaiian Garden's Casino",size:"50+",address:"Customer #151",contact:"Jorge Magana",phone:"562-860-5887",website:"hgcasino.com",focus:"In-house casino security",email:"jmagana@hgcasino.com",stage:"",notes:[{date:"2026-01-15",type:"Phone Call",note:"Great call with Jorge. Uses Galls. Needs badge embroidery."},{date:"2026-05-07",type:"",note:"Call Jorge or email"}]},
-{company:"Diversified Protection Corp.",size:"",address:"Daniel Island SC",contact:"Ms. Sonia",phone:"843-410-5642 ext.102",website:"www.dpcsecurity.com",focus:"Commercial / Government",email:"",stage:"initial",notes:[{date:"2026-03-10",type:"",note:"Spoke to Mrs. Sonya. Uses Unipro. Sent email detailing our services."},{date:"2026-05-20",type:"",note:"Call Ms. Sonya if no response"}]},
-{company:"Absolute Security International",size:"50+",address:"5155 Irwindale Ave, Irwindale CA",contact:"Sunny",phone:"626-858-7188",website:"www.absolutesecurityintl.com",focus:"Mostly commercial",email:"",stage:"",notes:[{date:"2026-02-18",type:"",note:"Finally spoke to Sunny. Gave me his cell."},{date:"2026-04-29",type:"",note:"Left Sunny a message with receptionist."}]},
-{company:"Convergence Executive Protection",size:"10+",address:"Memphis TN",contact:"Tamika Young",phone:"901-504-5320",website:"",focus:"Commercial",email:"",stage:"",notes:[{date:"2026-02-24",type:"",note:"Tamika will check website and order when needed."},{date:"2026-04-02",type:"",note:"Check back in with Tamika"}]},
-{company:"Ameriguard Security Services",size:"",address:"5470 W. Spruce #102, Fresno CA",contact:"Lawrence Garcia",phone:"559-271-5984",website:"www.ameriguardsecurity.com",focus:"Commercial / Government",email:"",stage:"",notes:[{date:"2026-05-07",type:"",note:"Called, left message with secretary."},{date:"2026-05-21",type:"",note:"Reach back out to Lawrence."}]},
-{company:"St. Thomas Security",size:"10+",address:"",contact:"Mike Rizk",phone:"951-445-3110",website:"",focus:"Commercial. Previous customer 2022.",email:"",stage:"",notes:[{date:"2026-04-01",type:"",note:"Mike came in and is currently buying from us."}]},
-{company:"Strategic Security",size:"3,000+",address:"19 Bellemeade Ave, Smithtown NY",contact:"",phone:"1-888-772-7475",website:"https://www.sscctu.com/",focus:"",email:"info@sscctu.com",stage:"",notes:[]},
-{company:"Iris Protection Services",size:"",address:"10566 Knott Avenue, Stanton CA",contact:"",phone:"(310) 766-5927",website:"https://irisprotectionservices.com/",focus:"",email:"info@irisprotectionservices.com",stage:"",notes:[]},
-{company:"AUMAGA Inc.",size:"",address:"Carson CA",contact:"",phone:"424.454.3656",website:"https://www.aumagainc.com/",focus:"",email:"ops@aumagainc.com",stage:"",notes:[]},
-{company:"Valcor Security Group",size:"",address:"West Hollywood CA",contact:"",phone:"424-244-0943",website:"Valcorsecurity.com",focus:"",email:"office@valcorsecurity.com",stage:"",notes:[]},
-{company:"American Corporate Security",size:"",address:"340 Golden Shore Suite 100, Long Beach CA",contact:"",phone:"",website:"https://amcorpsec.com/",focus:"",email:"",stage:"",notes:[]}
+{company:"Allied Universal",size:"~800k+ employees",address:"700 S Flower St Suite 400, Los Angeles, CA 90017",contact:"",phone:"213-362-3650",website:"https://www.aus.com",focus:"Corporate, patrols, retail, events",email:"",stage:"Customer",notes:[]},
+{company:"Securitas",size:"~333k employees",address:"1055 Wilshire Blvd Ste 1501/1600, Los Angeles, CA 90017",contact:"",phone:"213-580-8825",website:"https://www.securitasinc.com",focus:"Corporate, govt, retail, patrol",email:"",stage:"Reach out",notes:[]},
+{company:"GardaWorld",size:"100k+ employees",address:"1200 W 7th St Ste 300, Los Angeles, CA 90017",contact:"",phone:"213-330-1004",website:"https://www.garda.com",focus:"Corporate, residential, patrol, retail",email:"",stage:"Customer",notes:[]},
+{company:"Inter-Con Security",size:"10k+ employees",address:"210 S De Lacey Ave, Pasadena, CA 91105",contact:"",phone:"626-535-2200",website:"https://icsecurity.com",focus:"Government, critical infrastructure, corporate",email:"inquiries@icsecurity.com",stage:"Reach out",notes:[{"date":"2025-12-04","type":"Phone Call","note":"Was transferred to extension 1085 but no name was given. So I left a message."},{"date":"2025-12-17","type":"Phone Call","note":"Called the general line at 626-535-2200 and was told that the best way to offer our services was to emai HR at hr@icsecurity.com"},{"date":"2026-01-06","type":"","note":"followed up with an email to the HR email address and cc'd Alejandro Herrera whom Edwards previously tried to introduce to me."},{"date":"2026-02-03","type":"","note":"Called the hiring number and got through to an Andrew. I left my information with him for Alejandro. He called me 2 minutes later and said that Alejandro asked me to email him my information."},{"date":"2026-05-07","type":"","note":"Left Alejandro a voicemail with my contact information."},{"date":"2026-05-14","type":"","note":"try Alejandro again. Maybe email him or try one of Jose's contacts."}]},
+{company:"Prosegur Security",size:"150k+ employees",address:"Los Angeles region",contact:"",phone:"",website:"https://www.prosegur.us",focus:"Corporate, retail, patrol",email:"contact.us@prosegur.com",stage:"Reach out",notes:[{"date":"2025-12-03","type":"Phone Call","note":"Left mess. with HR."},{"date":"2026-01-14","type":"Phone Call","note":"Called and left a mess. with Recruiting"},{"date":"2026-02-05","type":"","note":"Called HR again and left a message. obtained an email address on line and sent an email as well"},{"date":"2026-05-07","type":"","note":"Left mess. with LA branch & Santa Clara branches."},{"date":"2026-05-14","type":"","note":"call again"}]},
+{company:"American Guard Services",size:"Large national",address:"Carson/Gardena CA",contact:"",phone:"",website:"https://americanguardservices.com",focus:"Maritime, govt, commercial, patrol",email:"info@americanguardservices.com",stage:"Customer",notes:[{"date":"","type":"","note":"CURRENT CUSTOMER"}]},
+{company:"American Global Security",size:">10 guards",address:"LA regional",contact:"",phone:"See website",website:"https://americanglobalsecurity.com",focus:"Armed/unarmed, patrols, commercial",email:"info@agspatrol.com",stage:"Reach out",notes:[]},
+{company:"Citiguard",size:">10 guards",address:"Los Angeles",contact:"",phone:"See website",website:"https://www.mysecurityguards.com",focus:"Commercial, residential, events",email:"info@citiguardinc.com",stage:"Phone Call",notes:[]},
+{company:"Guardian National Security",size:"51–200 employees",address:"Los Angeles",contact:"",phone:"See website",website:"https://gnsguard.com",focus:"Patrols, retail, industrial",email:"",stage:"Reach out",notes:[{"date":"2025-12-03","type":"Phone Call","note":"Spoke to person who wouldn't give name. But took my name and number down. Said that he would talk to his team and get back to me if they needed anything."},{"date":"2026-01-15","type":"Phone Call","note":"Followed up and a guy saying he was in charge (wouldn't tell me his name) said that he is not interested at the moment."},{"date":"","type":"","note":"Send advertisement in future. Do not call"}]},
+{company:"Code 4 Private Security",size:"11–50 employees",address:"Los Angeles",contact:"",phone:"888-601-5311",website:"https://allcode4.com",focus:"Patrols, retail, commercial",email:"CA@allcode4.com",stage:"Reach out",notes:[]},
+{company:"Command Int’l Security",size:">10 guards",address:"6819 Sepulveda Blvd Ste 312, Van Nuys CA 91405",contact:"",phone:"877-512-6662",website:"https://commandsecurityservices.com",focus:"Retail, patrols, malls",email:"",stage:"Reach out",notes:[]},
+{company:"CSD Patrol",size:">10 guards",address:"Los Angeles",contact:"",phone:"See website",website:"https://csdpatrol.com",focus:"Patrols, schools, commercial",email:"",stage:"Reach out",notes:[{"date":"2025-12-03","type":"Phone Call","note":"Spoke to Brittany who is in charge of ordering. company seems small. She asked about patch turnaround along with contact informations (Website/phone/emial). She seemed interested. I offered samples if needed."},{"date":"2025-12-17","type":"Phone Call","note":"I called and no one answered twice. I sent Brittany a follow up emial."},{"date":"","type":"","note":"01/072026"},{"date":"","type":"","note":"Spoke with Brittany. She said that she will consider trying us out but they aren't planning anything until mid February 2026. She gave me a new email to send her my info. So that she can reach out if she needs anything before then. mgr.csdpatrol.com"},{"date":"2026-02-19","type":"","note":"Called and left a mess. for Brittany and followed up with an email."},{"date":"2026-03-26","type":"","note":"follow up with Brittany"},{"date":"","type":"","note":"Left a message with secratary. She took down my phone number and email."}]},
+{company:"SSA Security Group",size:">10 guards",address:"21601 Devonshire St #317, Chatsworth CA",contact:"",phone:"818-773-5600",website:"https://ssa-securitygroup.com",focus:"HOA, neighborhood patrol, business",email:"info@ssa-pi.com",stage:"Reach out",notes:[]},
+{company:"Security Base Group",size:">10 guards",address:"700 Flower St, Los Angeles",contact:"",phone:"844-999-9928",website:"https://securitybasegroup.com",focus:"Events, commercial",email:"info@securitybasegroup.com",stage:"Reach out",notes:[]},
+{company:"Citywide Security",size:">50 guards",address:"Los Angeles",contact:"",phone:"800-569-6007",website:"https://citywidesecuritycompany.com",focus:"Corporate, retail, govt",email:"contact@citywidesecuritycompany.com",stage:"Reach out",notes:[{"date":"2025-12-04","type":"Phone Call","note":"Spoke to someone in their 800 number and they said they do not have anything to do with the uniform. Those come from corporate office. He couldn't tell me their corp. info. I found it on line. Will call next week since they are in New York."},{"date":"2025-12-09","type":"Phone Call","note":"Spoke to Ronit B. She let me know that the company has a total of 200 guards nationwide. They currently use a local supplier that they send fitting to. She alos filled me in on the types of uniforms that they mainly use. Ronit gave me her emial and said that if I sent her pricing, she would pass it along to management. Which I did. I will follow up with her in 1 week."},{"date":"2026-01-07","type":"","note":"Spoke to Ronit to follow up on my last email. She said that the company was about to make some uniform changes and she would forward my email to the two people in charge of decision making. One was out on vacation for another week. They would reach out if they were interested. I asked if I can follow up with her in 2-3 weeks if I didn't hear anything back. She said ok."},{"date":"2026-01-14","type":"","note":"followed up with an email to Ronit to make sure she received pricing - Called and left a message on 01/15 with my phone number"},{"date":"2026-01-29","type":"","note":"Spoke to Ronit. Offered her patch services. and pricing on tactical pants at 22.95. They use a local compnay 911 uniforms for all NY uniforms. Might consider using us for other states and maybe patches."},{"date":"2026-05-07","type":"","note":"Spoke to Ronit and resent her my contact information. I offered her free shipping on order over $200"}]},
+{company:"Professional Security Guard Inc",size:">10 guards",address:"Los Angeles",contact:"",phone:"See website",website:"https://prosecurityguard.com",focus:"Commercial, construction, retail",email:"info@prosecurityguard.com",stage:"Reach out",notes:[]},
+{company:"Eagle Eye Pro Security",size:">10 guards",address:"Los Angeles",contact:"",phone:"See website",website:"https://eagleeyepro.com",focus:"Business, industrial, events",email:"info@eagleeyepro.com",stage:"Reach out",notes:[]},
+{company:"Superior Protection Services",size:">10 guards",address:"Los Angeles",contact:"",phone:"See website",website:"https://superiorprotect.com",focus:"Commercial, construction, patrol",email:"info@superiorprotect.com",stage:"Reach out",notes:[]},
+{company:"First Guardian Security",size:">10 guards",address:"Los Angeles",contact:"",phone:"See website",website:"https://firstguardiansecurity.com",focus:"Corporate, residential, retail",email:"info@firstguardiansecurity.com",stage:"Reach out",notes:[]},
+{company:"Reel Security Corp",size:">10 guards",address:"15303 Ventura Blvd Ste 1080, Sherman Oaks CA 91403",contact:"",phone:"818-508-4750",website:"https://reelsecurity.com",focus:"Film/TV production",email:"info@reelsecurity.com",stage:"Reach out",notes:[]},
+{company:"Hollywood Production Security",size:">10 guards",address:"6520 Platt Ave Ste 681, West Hills CA 91307",contact:"",phone:"323-461-3377",website:"",focus:"Film/TV production",email:"hpsthomas@gmail.com",stage:"Reach out",notes:[]},
+{company:"Crew Protection",size:">10 guards",address:"Los Angeles",contact:"",phone:"See website",website:"https://crewprotection.com",focus:"Film/TV production",email:"service@crewprotection.com",stage:"Reach out",notes:[]},
+{company:"Action Force Security",size:">10 guards",address:"Los Angeles",contact:"",phone:"See website",website:"",focus:"Film/TV & events",email:"info@actionforcesecurity.com",stage:"Reach out",notes:[]},
+{company:"Whelan Security",size:"500+",address:"Phoenix, AZ",contact:"",phone:"WHELANSECURITY.COM",website:"",focus:"I reached out and found out that they have been bought by GARDA 12/09/2025",email:"",stage:"",notes:[]},
+{company:"Nordic Security",size:"100+",address:"Costa Mesa, CA",contact:"",phone:"Nordicsec.com",website:"",focus:"I reached out and found out that they have been bought by AUS 12/10/2025",email:"",stage:"",notes:[]},
+{company:"Akima ",size:"1,000+",address:"Alaska",contact:"Contact: Terry Nelson",phone:"",website:"akima.com",focus:"We value hearing from our community. Not all comments on this page will receive a response. For questions, concerns, or feedback, please contact us at media@akima.com so we can address your message through our established shareholder feedback process.",email:"",stage:"",notes:[{"date":"2026-01-15","type":"","note":"Call"},{"date":"","type":"","note":"Left message with receptionis at (571) 323-5200 ext.9"},{"date":"","type":"","note":"Follow up"},{"date":"2026-03-04","type":"","note":"Call back and ask for Terry Nelson. Mention Marine Corp Museum (David Perry) in Triangle,VA"}]},
+{company:"Parasys",size:"2,000+",address:"Herndon, VA",contact:"L.wilson & ap@parasys.com",phone:"703-263-7849",website:"parasys.com",focus:"Page · Professional Service",email:"",stage:"",notes:[{"date":"2026-01-15","type":"","note":"Call"},{"date":"","type":"","note":"Left a message with Michael at ext.00"},{"date":"","type":"","note":"Follow up"},{"date":"2026-03-04","type":"","note":"Call back and leave a mess. with someone else. Mention FAA, FEMA, NAVY, DOL etc. contracts"}]},
+{company:"Centinela Hospital Med Ctr. Scurity",size:"50-100",address:"Inglewood, CA",contact:"Lawrence Lewis llewis5@primehealthcare.com",phone:"310.680.1480",website:"primehealthcare.com",focus:"2553 Dulles View Drive, Herndon, VA, United States, Virginia",email:"",stage:"",notes:[{"date":"2025-12-16","type":"","note":"Follow up"},{"date":"","type":"","note":"Spoke to Lawrence. He did receive my email and was going to go over it before submitting it to hight up's. I offered samples if needed."},{"date":"","type":"","note":"Follow up"},{"date":"","type":"","note":"01/07 2026"},{"date":"","type":"","note":"Left Lawrence a voice message regarding pricing and follow up if he's been able to show it to his supervisor. called his (424) cell number."},{"date":"2026-01-14","type":"","note":"Called Lawrence and left him a message at his (310) phone number."},{"date":"2026-01-29","type":"","note":"Called Lawrence and left him a voice message."},{"date":"2026-04-29","type":"","note":"Spoke to Lawrence. He will be sending me a picture of a black shirt and pant that they want pricing on."},{"date":"2026-05-06","type":"","note":"Call/text Lawrence if you dont hear from him about the quote"}]},
+{company:"Chenega Naswik International,Inc.",size:"20+",address:"Port Hadlock, WA",contact:"Gerald Powless gerald.powless@chenega.com",phone:"360-315-6094  C: 360-797-3944 ",website:"Chenega Security",focus:"(571) 323-5200",email:"",stage:"",notes:[{"date":"2025-12-15","type":"","note":"Follow up"},{"date":"","type":"","note":"Spoke to Gerald through email. He asked how Chenega can start ordering from us. I sent him a new customer form. He said he would run it by corporate to get thing moving forward."},{"date":"","type":"","note":"Follow up"},{"date":"2026-01-15","type":"","note":"Email Gerald Powless"},{"date":"2026-02-05","type":"","note":"emailed Gerald regarding setting up his Chenega account with us."},{"date":"2026-02-05","type":"","note":"Emailed Gerald and he told me this: Leo.  I do not get to order directly anymore. I will pass this email on to our company rep that orders everything.\n-Gerald Powless"},{"date":"2026-02-25","type":"","note":"-Email contact at Chenega the back up email if she hasn't gotten back to me"}]},
+{company:"Montano Security",size:"20+",address:"10880 Wilshire Blvd. Ste. 1101 Los Angeles, Ca. 90024",contact:"Ezequiel Montano info@montanosecurity.com",phone:"424-385-7445",website:"montanosecurity.com",focus:"https://www.linkedin.com/company/akima/mycompany/",email:"",stage:"",notes:[{"date":"2025-12-17","type":"","note":"Follow up"},{"date":"","type":"","note":"Left Ezequiel a message / On Dec. 18 Ezequiel emailed me and asked for pricing on tactical pants and equipment/ gear. I sent him the pricing on 12/20"},{"date":"","type":"","note":"Follow up"},{"date":"2026-01-06","type":"","note":"Emailed a follow up to the pricing sent to Eziquiel."},{"date":"2026-01-14","type":"","note":"Called Ezequiel and left him a voicemail. following up on pricing and offered samples or a meet up. and let him know we have a new website."},{"date":"2026-02-05","type":"","note":"Email Ezequiel and let him know you'll be on standby should he need anything."},{"date":"2026-02-25","type":"","note":"Left Ezequiel a voicemessage"},{"date":"2026-04-29","type":"","note":"I texted Ezequiel our webside ."}]},
+{company:"National Eagle Security Inc.",size:"20+",address:"3200 Wilshire Blvd. Ste. 1208  Los Angeles, Ca. 90010",contact:"Pauline Maglaque/ info@nationaleaglesecurity.com",phone:"213-637-0200",website:"nationaleaglesecurity.com",focus:"akima.com",email:"",stage:"",notes:[{"date":"2025-12-17","type":"","note":"Follow up"},{"date":"","type":"","note":"Spoke to receptionist. She said Pauline was currently out of the office. She seemed interested and would pass my information to Pauline."},{"date":"","type":"","note":"Follow up"},{"date":"2026-01-08","type":"","note":"Called and phone rang with no answer. I emailed Pauline with a re-introductory message."},{"date":"2026-01-15","type":"","note":"Asked for Pauline and she wasn't available. Receptionist asked for my name and looked up my email to conifrm she received it. She said she would pass along the info. to Pauline. Seemed interested."},{"date":"2026-03-04","type":"","note":"Call back and check with Pauline if anything is needed."}]},
+{company:"St. Thoms Security (Cust. 199)",size:"10+",address:"",contact:"Mike Rizk",phone:"951-445-3110",website:"",focus:"They do mostly commercial. Use to be a customer from 2022. I reached out around July with no response. I reached out again about a month ago and left a mess. He just called me back and is planning on coming in around the first week of January. Wants to buy some shirts, jackets and belts.",email:"",stage:"",notes:[{"date":"2026-01-14","type":"","note":"Follow up"},{"date":"","type":"","note":"spoke to Mike. He says that he will be coming in on Monday 01/19/2026"},{"date":"","type":"","note":"Follow up"},{"date":"2026-02-19","type":"","note":"Spoke to Mike. He is going to come down and order a couple of items next week. He had an eye infection problem."},{"date":"2026-04-01","type":"","note":"Mike came in and is currenty buying from us"}]},
+{company:"Absolute Security International",size:"50+",address:"5155 Irwindale Ave. Irwindale, Ca. 91706",contact:"\"Sunny\"",phone:"626-858-7188",website:"www.absolutesecurityintl.com",focus:"Appear to be mostly commercial ",email:"",stage:"",notes:[{"date":"2026-01-07","type":"","note":"Follow up"},{"date":"","type":"","note":"I sent an introduction email to Sunny."},{"date":"","type":"","note":"Follow up"},{"date":"2026-01-15","type":"","note":"Tried to call Sunny 2 times and he appears to be avoiding. Try him back another time."},{"date":"","type":"","note":"Follow up"},{"date":"2026-02-18","type":"","note":"Finally spoke to Sunny. He gave me his cell phone and wanted me to text me our website. He would reach out if he had any questions."},{"date":"2026-02-25","type":"","note":"Check back in with Sunny"},{"date":"2026-03-26","type":"","note":"Texted and left Sunny a message"},{"date":"2026-04-29","type":"","note":"Left Sunny a message with receptionist."}]},
+{company:"Convergence Executive Prot.Srvcs.",size:"10+",address:"6115 Winchester Rd. Suite #300 Memphis, TN 38115",contact:"Tamika Young",phone:"901-504-5320",website:"convergenceprotective@gmail.com",focus:"Appear mostly commercial Security/ They ordered Navy windbreakers with \"Security\" (qty.10) on Shopify",email:"",stage:"",notes:[{"date":"2026-01-15","type":"","note":"Followed up with an email regarding the ballcap"},{"date":"","type":"","note":"Follow up"},{"date":"2026-02-05","type":"","note":"Left Tamika a voicemail mess."},{"date":"2026-02-24","type":"","note":"Spoke to Tamika. She said she would be checking out our website and definitely place an order when she needs something. I believe this company is small and had a few securigy guards."},{"date":"2026-04-02","type":"","note":"Check back in with Tamika"}]},
+{company:"Hawaiian Garden's Casino",size:"50+",address:"Customer #151",contact:"Jorge Magana",phone:"562-860-5887",website:"jmagana@hgcasino.com",focus:"In-house casino security. Customer has purchase in the past. We will try to re-engage",email:"",stage:"",notes:[{"date":"2026-01-15","type":"","note":"Phone call"},{"date":"","type":"","note":"Spoke to Jorge and had a great conversation. They currtently use Galls. He is willing to take a look at us. Use Blue /Black Sanmar type safety shirts. Need badge embroidery on left chest with badge numbers. He will email me any sample needed."},{"date":"","type":"","note":"Emailed"},{"date":"2026-02-03","type":"","note":"Emailed a follow up to Jorge regarding the picture of the polo shirt so that I can provide a sample."},{"date":"2026-02-18","type":"","note":"Called Jorge and left a message."},{"date":"2026-04-29","type":"","note":"Called Jorge to ask for sample polo. And left a message. with front desk"},{"date":"2026-05-07","type":"","note":"Call Jorge or email"}]},
+{company:"Guardian International Solutions",size:"50-100",address:"3415 S. Sepulveda Blvd. Suite 1100 Los Angeles, CA 90034",contact:"",phone:"(310) 729-3147",website:"GUARDIAN INTERNATIONAL SOLUTIONS INC.",focus:"Commercial",email:"general.info@guardiansolutions.net",stage:"",notes:[{"date":"2025-12-17","type":"Phone Call","note":"Spoke to Kim (CLERK), ask that I email details about our services and unifroms"}]},
+{company:"Protecting America ",size:"2025-10-30",address:"21350 Nordhoff St. #104C Chatsworth, CA 91311",contact:"",phone:"213 279-7988",website:"Security Guard Services - Protection America, Inc.",focus:"Commercial",email:"info@protection-america.com",stage:"",notes:[{"date":"2025-12-24","type":"Phone Call","note":"Spoke to Juan said to leave details and will give to the boss.\"Ed\" PPO 120313"}]},
+{company:"Safety Host Unit",size:"",address:"Los Angeles",contact:"",phone:"(888) 703-4004",website:"Hollywood Security Services – Safety Host Unit – Security Services",focus:"Commercial, Residential Industrial",email:"info@safetyhostunit.com",stage:"",notes:[{"date":"2025-12-24","type":"Phone Call","note":"Called and the phone just rings., no answer no voicemail need to call back"}]},
+{company:"Eagle Eye International Protective Services",size:"",address:"San Diego",contact:"",phone:"619 947-5442",website:"Contact Us for Security Information | EESS, Inc.",focus:"Commercial, Residential Industrial",email:"coo@eessinc.com",stage:"",notes:[]},
+{company:"Reliance Security ",size:"",address:"",contact:"",phone:"",website:"",focus:"",email:"",stage:"",notes:[]},
+{company:"Proforce 1 Protection Services",size:"10–50",address:"Anaheim, CA",contact:"",phone:"(800) 779-7691",website:"https://proforc1.com/",focus:"",email:"INFO@PROFORCE1PROTECTION.COM",stage:"",notes:[]},
+{company:"Elite Guard Security Services",size:"10–30",address:"Irvine, CA",contact:"",phone:"1-844-844-4434",website:"http://Eliteguardsecurityservices.com",focus:"",email:"info@eliteguard.net",stage:"",notes:[]},
+{company:"All American Statewide Security Guards",size:"20–100",address:"",contact:"",phone:"",website:"",focus:"",email:"",stage:"",notes:[]},
+{company:"GPS Security",size:"",address:"120-55 Queens Boulevard, New York, New York 11424",contact:"",phone:"646-963-1824",website:"www.weregps.com",focus:"",email:"",stage:"",notes:[]},
+{company:"South Coast Public Safety",size:"",address:"7930 N Dale St Ste G Buena Park, CA 90620 ",contact:"",phone:"833.727.7007",website:"southcoastpublicsafety.com",focus:"",email:"",stage:"",notes:[]},
+{company:"Coachella Valley Public Safety",size:"",address:"81701 US Highway 111 Suite 5 Indio, CA 92201",contact:"",phone:"760-625-2159",website:"coachellavalleypublicsafety.com",focus:"",email:"info@coachellavalleypublicsafety.com",stage:"",notes:[]},
+{company:"Patriot Protection Services ",size:"",address:"433 Industry Drive, Columbus, Ohio 43204, United States",contact:"",phone:"(614) 379-1333",website:"patriotprotectiveservices.com",focus:"",email:"",stage:"",notes:[]},
+{company:"Armory Protective Services",size:"",address:"Houston, TX, United States, Texas",contact:"",phone:"713-515-9584",website:"securityofficertx.com",focus:"",email:"",stage:"",notes:[]},
+{company:"HPD Security LLC",size:"",address:"Pulloyup, WA 98373",contact:"",phone:"800-320-7604",website:"hpdsecurity.com",focus:"",email:"",stage:"",notes:[]},
+{company:"Securitrust Security Services",size:"",address:"1741 Dakota Avenue S #172 Huron, South Dakota 57350",contact:"",phone:"605-796-0119",website:"securitrustsecurity.org",focus:"",email:"",stage:"",notes:[]},
+{company:"REA Security",size:"",address:"2421 W. 205th St, Ste D101 Torrance, CA 90501",contact:"",phone:"310-351-2337",website:"REAsecurity.com",focus:"",email:"info@reasecurity.net",stage:"",notes:[]},
+{company:"VP Protection Inc.",size:"",address:"505 Consumers Road, Unit 910 North York, Ontario, M2J 4V8",contact:"",phone:"416-218-3226",website:"vpprotection.com",focus:"",email:"info@vpprotection.com",stage:"",notes:[]},
+{company:"Performance One Security",size:"",address:"1500 North Main St, Suite 160  Fort Worth, TX 76164",contact:"",phone:"(682) 499-5620",website:"performanceonesecurity.com",focus:"",email:"info@performanceonesecurity.com",stage:"",notes:[]},
+{company:"Skyview Security",size:"",address:"",contact:"",phone:"416-262-9075",website:"skyviewsecurity.ca",focus:"",email:"",stage:"",notes:[]},
+{company:"Northern Force Security",size:"",address:"64 Jardin Dr. Vaughn, Ontario ",contact:"",phone:"",website:"nfsecurity.ca",focus:"",email:"",stage:"",notes:[]},
+{company:"American Freedom Security",size:"",address:"1601 Centinela Avenue #205, Inglewood, California 90302",contact:"",phone:"1-888-299-3021",website:"americanfreedomsecurity.com",focus:"",email:"sales@americanfreedomsecurity.com",stage:"",notes:[]},
+{company:"Guardian Security",size:"",address:"1534 N Moorpark Rd. #164 Thousand Oaks, CA 91360",contact:"",phone:"1-84-GUARDIAN",website:"protectedbyguardian.com",focus:"",email:"info@guardiansworld.com",stage:"",notes:[]},
+{company:"High Calibur Protection Group",size:"",address:"Los Angeles, CA",contact:"",phone:"323-492-9545",website:"highcaliburpg.com",focus:"",email:"info@highcaliburpg.com",stage:"",notes:[]},
+{company:"ATF Private Security",size:"",address:"134 Waverly Dr. Pasadena, CA 91105",contact:"",phone:"323-333-0600",website:"atfprivatesecurity.com",focus:"",email:"tony@atfprivatesecurity.com",stage:"",notes:[]},
+{company:"Cambridge Security",size:"",address:"951 Broken Sound Parkway NW STE 188 Boca Raton FL, 33487",contact:"",phone:"954-320-4407",website:"cambridgesecurityservices.com",focus:"",email:"sales@cambridgesecurityservices.com",stage:"",notes:[]},
+{company:"Silbar Security",size:"",address:"133 Kempsville Road Chesapeake, VI 23320",contact:"",phone:"888-580-0868",website:"silbarsecurity.com",focus:"",email:"info@silbarsecurity.com",stage:"",notes:[]},
+{company:"Amory Security Services",size:"",address:"Houston, TX",contact:"",phone:"713-515-9584",website:"securityofficertx.com",focus:"",email:"",stage:"",notes:[]},
+{company:"Dinasty Security Inc.",size:"",address:"3001 Sierra Pine Ave Vernon, CA 90058",contact:"",phone:"866-308-8806",website:"dinastysecurity.com",focus:"",email:"",stage:"",notes:[]},
+{company:"AGS Protect",size:"",address:"6133 Bristol PKWY Suite 175 Culver City, CA 90230",contact:"",phone:"424-800-2401",website:"agsprotect.com",focus:"",email:"",stage:"",notes:[]},
+{company:"Soco Private Security",size:"",address:"1240 Briggs Ave Santa Rosa, CA 95401",contact:"",phone:"",website:"soco707.com",focus:"",email:"",stage:"",notes:[]},
+{company:"Owl Sight Security Services",size:"",address:"18645 Sherman Way #105 Reseda, CA 91335",contact:"",phone:"818-818-3307",website:"owlsightsecurity.com",focus:"",email:"info@owlsightsecurity.com",stage:"",notes:[]},
+{company:"Access Patrol Services",size:"",address:"",contact:"",phone:"",website:"https://accesspatrolservice.com/",focus:"",email:"info@accesspatrolservice.com",stage:"",notes:[]},
+{company:"Access Control Security",size:"",address:"2622 W Lincoln Avenue 107, Anaheim CA 92801",contact:"",phone:"(818) 349-0029",website:"https://accesscontrolsecurity.com/",focus:"",email:"",stage:"",notes:[]},
+{company:"American Global Security",size:"",address:"9410 Topanga Canyon Blvd. STE 202 Chatsworth, CA 91311",contact:"",phone:"877-482-7343",website:"americanglobalsecurity.com",focus:"",email:"",stage:"",notes:[]},
+{company:"Helton Security",size:"",address:"7012 City Centery Way Suite 274 Fairview, TN 37062",contact:"",phone:"615-840-5442",website:"heltonsecurity.us",focus:"",email:"helton.sec@hotmail.com",stage:"",notes:[]},
+{company:"California Private Security",size:"",address:"PO BOX 1043  Rocklin, CA 95677",contact:"",phone:"800 830 6191",website:"californiaprivatesecurity.com",focus:"",email:"",stage:"",notes:[]},
+{company:"BGA SECURITY PATROL",size:"",address:"P.O.BOX 3122  MISSION VIEJO, CA 92690-9998",contact:"",phone:"949-624-3836",website:"https://www.bgasecuritypatrol.com/",focus:"",email:"info@bgasecuritypatrol.com",stage:"",notes:[]},
+{company:"CSC Security",size:"200+",address:"17101 Superior Street  Northridge  CA 91325",contact:"",phone:"",website:"csc-usa.com",focus:"",email:"",stage:"",notes:[]},
+{company:"Good Guard Security",size:"6000+",address:"",contact:"",phone:"",website:"goodguardsecurity.com",focus:"",email:"",stage:"",notes:[]},
+{company:"Valcor Security Group",size:"",address:"925 N La Brea Ave, Ste 400 West Hollywood, CA 90038",contact:"",phone:"424 244 0943",website:"Valcorsecurity.com",focus:"",email:"office@valcorsecurity.com",stage:"",notes:[]},
+{company:"Valor Guard Security",size:"",address:"3501 Mall View Rd, Ste 115-390, Bakersfield, CA 93306",contact:"",phone:"(661) 658-8898",website:"https://valorguardsecurity.com/",focus:"",email:" info@valorguardsecurity.com",stage:"",notes:[]},
+{company:"Protective Force International",size:"",address:"1100 E. Bridger Ave.  Suite #100   Las Vegas, NV 89101",contact:"",phone:"(702) 764-9618 ",website:"https://www.protectiveforceintl.com/",focus:"",email:"info@protectiveforceintl.com",stage:"",notes:[]},
+{company:"HPA Security & Investigations LLC",size:"",address:"2000 East Lamar Blvd. Suite #600 Arlington, TX 76006",contact:"",phone:"682-462-2283",website:"https://www.hpasecurity.com/",focus:"",email:"asstchief@hpasecurity.com",stage:"",notes:[]},
+{company:"Meridian Security Group",size:"2026-02-10",address:"1312 West Magnolia Blvd, Burbank, California 91506, United States",contact:"",phone:"(818) 813-3668",website:"https://meridiansecuritygroup.org/",focus:"",email:"meridiansecgroup@gmail.com ",stage:"",notes:[]},
+{company:"Alert Security Guard Services Inc.",size:"",address:"400 Ramona Ave., Suite 208 Corona, CA 92879",contact:"",phone:"",website:"https://www.alertsecurityservs.com/",focus:"",email:"Office@alertservicess.com",stage:"",notes:[]},
+{company:"Strategic Security",size:"3,000+",address:"19 BELLEMEADE AVE SMITHTOWN, NY 11787",contact:"",phone:"1-888-772-7475",website:"https://www.sscctu.com/",focus:"",email:"info@sscctu.com",stage:"",notes:[]},
+{company:"Iris Protection Services",size:"",address:"10566 Knott Avenue Stanton, CA 90680",contact:"",phone:"(310) 766-5927",website:"https://irisprotectionservices.com/",focus:"",email:"info@irisprotectionservices.com",stage:"",notes:[]},
+{company:"AUMAGA Inc.",size:"",address:"550 E. Carson Plaza Dr. Suite 218 Carson, CA 90746",contact:"",phone:"424.454.3656",website:"https://www.aumagainc.com/",focus:"",email:"ops@aumagainc.com",stage:"",notes:[]},
+{company:"M4 Security Guard Service Inc",size:"",address:"1307 W 6th St Unit #202, Corona, CA 92882",contact:"",phone:"(951) 407-9115",website:"https://www.m4securityguard.com/",focus:"951-407-9115",email:"",stage:"",notes:[]},
+{company:"Lady Mehan Security",size:"",address:"1941 California Ave #78712, Corona, CA 92877",contact:"",phone:"310) 600-8788",website:"",focus:"",email:"",stage:"",notes:[]},
+{company:"Pinnacle Security Services",size:"",address:"720 W 6th St Suite 112, Corona, CA 92882",contact:"",phone:"(800) 569-1006",website:"",focus:"",email:"",stage:"",notes:[]},
+{company:"Global Force Securirty Inc.",size:"50+",address:"614 W Manchester Blvd, Inglewood, CA 90301",contact:"Contact: Bernice",phone:"310-641-6200",website:"https://globalforceps.com",focus:"",email:"Contact: Bernice",stage:"",notes:[{"date":"2026-02-24","type":"","note":"Called"},{"date":"","type":"","note":"Was told that she is doing payroll all day. Try her back tomorrow 02/25/2026 after 11am."}]},
+{company:"Diversified Protection Corporation",size:"",address:"186 Seven Farms Dr Suite F-391, Daniel Island, SC 29492",contact:"Ms. Sonia / Referred by Tonya",phone:"843-410-5642 ext.102",website:"www.dpcsecurity.com",focus:"Commercial / Government Contracts",email:"",stage:"initial ",notes:[{"date":"2026-02-24","type":"","note":"Called"},{"date":"","type":"","note":"Asked for Henry Wolfe and was told by Tonya that Ms. Sonya was the person in charge of ordering uniforms. I called Ms. Sonya and she was gone for the day. Will try tomorrow earlier."},{"date":"","type":"","note":"Called"},{"date":"2026-03-10","type":"","note":"Spoke to Mrs. Sonya. She said they currently use Unipro and they are ok with them. She said that she would have to reach out to Henry Wolfe about making any changes to uniform purchasing. I sent her a email detailing our services."},{"date":"","type":"","note":"call"},{"date":"2026-04-29","type":"","note":"Spoke to Ms. Sonya. She hasn't spoken to Mr. Henry Wolfe but will let him know that we know Stacy and to ask him about us. I will reach back out in a month if I do not hear back freom her or Mr. Wolfe."},{"date":"2026-05-20","type":"","note":"Call Ms. Sonya if I dont hear back"}]},
+{company:"Ameriguard Security Services",size:"",address:"5470 W. Spruce #102, Fresno, Ca. 93722",contact:"Lawrence Garcia /Owner",phone:"559-271-5984",website:"www.ameriguardsecurity.com",focus:"Commercial / Government Contracts",email:"Eddie/Michael/Leo/Christina?",stage:"",notes:[{"date":"","type":"","note":"02/19 2026"},{"date":"","type":"","note":"Called"},{"date":"","type":"","note":"Asked for Lawrence and his secretary says he's mostly out of the office lately. She would give him all of my information."},{"date":"","type":"","note":"Call"},{"date":"2026-02-26","type":"","note":"Reach back out to Lawrence."},{"date":"2026-05-07","type":"","note":"Calle and left a mess with Lawrence's secrectary. She said that she would pass on my message along with our website."},{"date":"2026-05-21","type":"","note":"Reach back out to Lawrence."}]},
+{company:"American Corporate Security",size:"",address:"340 Golden Shore, Suite 100 Long Beach, CA 90802",contact:"",phone:"",website:"https://amcorpsec.com/",focus:"",email:"",stage:"",notes:[]},
+{company:"Main Patrol, Inc - Security Services		13950 Milton Ave 400 a, Westminster, CA 92683		https://mainpatrolca.com/",size:"",address:"",contact:"",phone:"",website:"",focus:"",email:"",stage:"",notes:[]}
 ];
 
 // ── STATE ─────────────────────────────────────────────────────────────────────
@@ -266,11 +333,42 @@ let S={
 };
 
 function load(){
-  try{const d=localStorage.getItem(SK);if(d){const p=JSON.parse(d);['sections','tasks','archived','events','recurRules','clients'].forEach(k=>{if(p[k])S[k]=p[k];});}}catch(e){}
-  if(!S.clients)S.clients=BASE_COMPANIES.map(c=>({...c,notes:[...(c.notes||[])]}));
+  try{
+    const d=localStorage.getItem(SK);
+    if(d){
+      const p=JSON.parse(d);
+      ['sections','tasks','archived','events','recurRules','clients'].forEach(k=>{if(p[k])S[k]=p[k];});
+    }
+  }catch(e){}
+
   if(!S.archived)S.archived=[];
-  // Ensure all clients have a files array
-  S.clients.forEach(c=>{if(!c.files)c.files=[];});
+
+  // ALWAYS ensure all 91 BASE_COMPANIES are present
+  // Build a full client list starting from BASE_COMPANIES, then overlay any saved data
+  const baseMap={};
+  BASE_COMPANIES.forEach(b=>{baseMap[b.company.toLowerCase()]={...b,notes:[...(b.notes||[])],files:[]};});
+
+  if(S.clients&&S.clients.length){
+    // Overlay saved client data onto base
+    S.clients.forEach(saved=>{
+      const key=saved.company.toLowerCase();
+      if(baseMap[key]){
+        // Apply saved stage, notes, files onto base company
+        if(saved.stage)baseMap[key].stage=saved.stage;
+        if(saved.notes&&saved.notes.length)baseMap[key].notes=saved.notes;
+        if(saved.files&&saved.files.length)baseMap[key].files=saved.files;
+        // Also carry over any custom fields
+        ['contact','phone','email','website','address','focus','size'].forEach(f=>{
+          if(saved[f]&&saved[f]!==baseMap[key][f])baseMap[key][f]=saved[f];
+        });
+      } else {
+        // Custom company added by user — keep it
+        baseMap[key]={...saved,notes:saved.notes||[],files:saved.files||[]};
+      }
+    });
+  }
+
+  S.clients=Object.values(baseMap);
   updateCounts();
 }
 // ── AUTO-SAVE LOGIC ───────────────────────────────────────────────────────────
@@ -285,13 +383,18 @@ function save(){
   try{localStorage.setItem(SK,JSON.stringify({sections:S.sections,tasks:S.tasks,archived:S.archived,events:S.events,recurRules:S.recurRules,clients:S.clients}));}
   catch(e){alert('Browser storage full — please Export to Sheets to free space.');}
   updateCounts();
-  // 2. If Sheets URL is configured, queue an auto-sync after 10 seconds of no further changes
+  // 2. If Sheets URL is configured, queue an auto-sync after 15 seconds of inactivity
+  // Only attempt if browser reports online — avoids NetworkError spam when offline
   if(SHEETS_URL){
     clearTimeout(_sheetsDebounce);
     setSyncStatus('Unsaved changes…');
     _sheetsDebounce=setTimeout(()=>{
-      exportToSheets(true); // silent=true means no alert on success, just status bar
-    },10000);
+      if(navigator.onLine!==false){
+        exportToSheets(true);
+      } else {
+        setSyncStatus('⚠ Offline — saved locally','err');
+      }
+    },15000);
   }
 }
 function updateCounts(){
@@ -313,20 +416,41 @@ async function exportToSheets(silent=false){
     if(!silent) alert('SHEETS_URL is empty. Open this file in a text editor and paste your Apps Script URL into the SHEETS_URL constant.');
     return;
   }
-  setSyncStatus('Saving to Sheets…');
+  setSyncStatus('Saving…');
   try{
-    // Use no-cors GET with payload as URL param to avoid CORS preflight issues with Apps Script
-    const payload=encodeURIComponent(JSON.stringify({
-      tasks:S.tasks,archived:S.archived,events:S.events,
-      clients:S.clients,recurRules:S.recurRules,sections:S.sections
-    }));
-    const res=await fetch(SHEETS_URL+'?action=save&data='+payload,{method:'GET',mode:'no-cors'});
-    // no-cors means we can't read the response — assume success if no exception thrown
+    // Split large payloads — URL params have a ~2000 char safe limit in some browsers
+    // We chunk clients separately if the full payload is too large
+    const corePayload={tasks:S.tasks,archived:S.archived,events:S.events,
+      recurRules:S.recurRules,sections:S.sections};
+    const fullPayload={...corePayload,clients:S.clients};
+    const encoded=encodeURIComponent(JSON.stringify(fullPayload));
+
+    if(encoded.length<120000){
+      // Normal path — send everything in one GET
+      await fetch(SHEETS_URL+'?action=save&data='+encoded,{method:'GET',mode:'no-cors'});
+    } else {
+      // Large payload — send core first, then clients separately
+      await fetch(SHEETS_URL+'?action=save&data='+encodeURIComponent(JSON.stringify(corePayload)),{method:'GET',mode:'no-cors'});
+      // Send clients in chunks of 20
+      for(let i=0;i<S.clients.length;i+=20){
+        const chunk=S.clients.slice(i,i+20);
+        await fetch(SHEETS_URL+'?action=saveClients&data='+encodeURIComponent(JSON.stringify({clients:chunk,offset:i})),{method:'GET',mode:'no-cors'});
+      }
+    }
+    // no-cors: can't read response body — assume success if no exception
     _lastSheetsSave=new Date();
-    setSyncStatus('✓ Auto-saved '+_lastSheetsSave.toLocaleTimeString(),'ok');
+    setSyncStatus('✓ Saved '+_lastSheetsSave.toLocaleTimeString(),'ok');
   }catch(e){
-    setSyncStatus('Sync error — check URL','err');
-    console.error(e);
+    // Catch network errors gracefully — data is still safe in localStorage
+    const msg=e&&e.message?e.message:String(e);
+    if(msg.includes('NetworkError')||msg.includes('Failed to fetch')||msg.includes('network')){
+      setSyncStatus('⚠ Offline — saved locally','err');
+      console.warn('Sheets sync skipped (offline or URL unreachable):', msg);
+    } else {
+      setSyncStatus('⚠ Sync failed — saved locally','err');
+      console.error('Sheets sync error:', e);
+    }
+    // Never surface raw error to user — data is safe in browser
   }
 }
 
@@ -350,21 +474,39 @@ async function importFromSheets(){
       if(data.events)S.events=data.events;
       if(data.recurRules)S.recurRules=data.recurRules;
       if(data.sections&&data.sections.length)S.sections=data.sections;
-      // MERGE clients: keep BASE_COMPANIES as foundation, overlay saved data on top
+      // SAFE MERGE: never delete existing clients or notes
+      // Start with current clients in browser (already has all 91+)
+      // Only overlay notes/stage/files from Sheets onto matching companies
       if(data.clients&&data.clients.length){
-        const merged=[...BASE_COMPANIES.map(b=>({...b,notes:[...(b.notes||[])],files:[]}))];
+        const current=[...S.clients]; // preserve everything in browser
         data.clients.forEach(saved=>{
-          const idx=merged.findIndex(m=>m.company===saved.company);
+          const idx=current.findIndex(m=>m.company.toLowerCase()===saved.company.toLowerCase());
           if(idx>=0){
-            // update saved fields but keep base data for missing fields
-            Object.keys(saved).forEach(k=>{if(saved[k]!==undefined&&saved[k]!==null&&saved[k]!=='')merged[idx][k]=saved[k];});
-            if(saved.notes&&saved.notes.length)merged[idx].notes=saved.notes;
-            if(saved.files&&saved.files.length)merged[idx].files=saved.files;
-          } else {
-            merged.push({...saved,notes:saved.notes||[],files:saved.files||[]});
+            // Only update fields that are non-empty in saved data
+            if(saved.stage)current[idx].stage=saved.stage;
+            // Merge notes: add any saved notes not already present
+            if(saved.notes&&saved.notes.length){
+              const existingNotes=current[idx].notes||[];
+              saved.notes.forEach(sn=>{
+                const already=existingNotes.some(en=>en.note===sn.note&&en.date===sn.date);
+                if(!already)existingNotes.push(sn);
+              });
+              current[idx].notes=existingNotes;
+            }
+            // Merge files
+            if(saved.files&&saved.files.length){
+              const existingFiles=current[idx].files||[];
+              saved.files.forEach(sf=>{
+                const already=existingFiles.some(ef=>ef.name===sf.name&&ef.url===sf.url);
+                if(!already)existingFiles.push(sf);
+              });
+              current[idx].files=existingFiles;
+            }
           }
+          // Note: we do NOT add new companies from Sheets here to avoid duplicates
+          // New companies are added via + Add or CSV import
         });
-        S.clients=merged;
+        S.clients=current;
       }
       save();render();
       setSyncStatus('✓ Imported '+new Date().toLocaleTimeString()+' ('+S.clients.length+' companies)','ok');
@@ -392,21 +534,37 @@ function secName(id){return(S.sections.find(s=>s.id===id)||{name:'—'}).name;}
 
 function generateRecurEvents(){
   const today=new Date();today.setHours(0,0,0,0);
-  const horizon=new Date(today);horizon.setDate(today.getDate()+28);
+  // Generate 12 weeks ahead (84 days) to cover both calendar weeks + future planning
+  const horizon=new Date(today);horizon.setDate(today.getDate()+84);
   S.recurRules.forEach(rule=>{
     const existDates=new Set(S.events.filter(e=>e.recurId===rule.id).map(e=>e.date));
-    let d=new Date(today);
-    while(d<=horizon){
+    // Respect end date if set
+    const ruleEnd=rule.endDate?new Date(rule.endDate+'T23:59:59'):null;
+    const effectiveHorizon=ruleEnd&&ruleEnd<horizon?ruleEnd:horizon;
+    // Start from max(today, startDate)
+    const ruleStart=rule.startDate?new Date(rule.startDate+'T12:00:00'):today;
+    let d=new Date(ruleStart<today?today:ruleStart);
+    while(d<=effectiveHorizon){
       const ds=fmtDate(d);const dow=d.getDay();
       let hit=false;
       if(rule.freq==='Daily')hit=true;
       else if(rule.freq==='Every weekday')hit=dow>=1&&dow<=5;
       else if(rule.freq==='Weekly')hit=dow===new Date(rule.startDate+'T12:00:00').getDay();
-      else if(rule.freq==='Every 2 weeks'){const diff=Math.round((d-new Date(rule.startDate+'T12:00:00'))/(7*86400000));hit=dow===new Date(rule.startDate+'T12:00:00').getDay()&&diff%2===0&&diff>=0;}
+      else if(rule.freq==='Every 2 weeks'){
+        const diff=Math.round((d-new Date(rule.startDate+'T12:00:00'))/(7*86400000));
+        hit=dow===new Date(rule.startDate+'T12:00:00').getDay()&&diff%2===0&&diff>=0;
+      }
       else if(rule.freq==='Monthly')hit=d.getDate()===new Date(rule.startDate+'T12:00:00').getDate();
       else if(rule.freq==='1st Friday')hit=dow===5&&d.getDate()<=7;
       else if(rule.freq==='Last Friday'){if(dow===5){const nx=new Date(d);nx.setDate(d.getDate()+7);hit=nx.getMonth()!==d.getMonth();}}
-      if(hit&&!existDates.has(ds)){S.events.push({id:'re'+Date.now()+Math.random().toString(36).slice(2),recurId:rule.id,title:rule.title,cat:rule.cat,date:ds,hour:rule.hour,note:rule.note||''});existDates.add(ds);}
+      if(hit&&!existDates.has(ds)){
+        S.events.push({
+          id:'re'+Date.now()+Math.random().toString(36).slice(2),
+          recurId:rule.id,title:rule.title,cat:rule.cat,
+          date:ds,hour:rule.hour,note:rule.note||''
+        });
+        existDates.add(ds);
+      }
       d.setDate(d.getDate()+1);
     }
   });
@@ -436,12 +594,46 @@ function render(){
 function renderPlanner(){
   const m1=getMonday(S.weekOffset),m2=getMonday(S.weekOffset+1);
   const d1=weekDays(m1),d2=weekDays(m2);
+  // Get dates for the current top week view
+  const topWeekDates=new Set(d1.map(d=>fmtDate(d)));
+  // Get recurring events that fall in the current top week
+  const recurThisWeek=S.events.filter(ev=>ev.recurId&&topWeekDates.has(ev.date));
+
   let sb='<div class="sb">';
+  // Week indicator at top of sidebar
+  sb+=`<div style="background:#1e3a5f;border-radius:8px;padding:7px 11px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+    <span style="font-size:11px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.06em">
+      ${fmtShort(m1)} – ${fmtShort(d1[6])}
+    </span>
+    <span style="font-size:10px;color:rgba(255,255,255,.7)">${S.weekOffset===0?'This week':S.weekOffset===1?'Next week':'Week '+(S.weekOffset>0?'+':'')+S.weekOffset}</span>
+  </div>`;
+
   S.sections.forEach(sec=>{
     const active=S.tasks.filter(t=>t.secId===sec.id);
+    // Find recurring events for this section that fall in the displayed week
+    const recurForSec=recurThisWeek.filter(ev=>{
+      const rule=S.recurRules.find(r=>r.id===ev.recurId);
+      return rule&&(rule.cat===sec.cat||rule.cat===sec.name);
+    });
+    const hasContent=active.length||recurForSec.length;
     sb+=`<div class="sec-block ${sec.style||'s-other'}" ondragover="event.preventDefault()" ondrop="dropSec(event,'${sec.id}')">`;
     sb+=`<div class="sec-hdr"><span class="sec-name" onclick="renSec('${sec.id}')">${sec.name}</span><button class="addbtn" onclick="openAdd('${sec.id}')">+</button></div>`;
-    if(!active.length)sb+=`<div class="no-tasks">No tasks</div>`;
+    if(!hasContent)sb+=`<div class="no-tasks">No tasks</div>`;
+    // Show recurring task cards for this week first
+    recurForSec.forEach(ev=>{
+      const rule=S.recurRules.find(r=>r.id===ev.recurId);
+      if(!rule)return;
+      const dow=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(ev.date+'T12:00:00').getDay()];
+      sb+=`<div class="tcard" style="border-left:3px solid #6366f1;opacity:.9">
+        <div class="tcard-title" style="color:#3730a3">🔁 ${rule.title}</div>
+        <div class="tcard-meta">
+          <span class="badge" style="background:#e0e7ff;color:#3730a3">recurring</span>
+          <span class="b-due">${dow} ${ev.date.slice(5)}</span>
+          ${rule.endDate?`<span style="font-size:10px;color:#64748b">until ${rule.endDate}</span>`:'<span style="font-size:10px;color:#64748b">ongoing</span>'}
+        </div>
+      </div>`;
+    });
+    // Show regular tasks
     active.forEach(t=>sb+=renderCard(t));
     sb+=`</div>`;
   });
@@ -740,21 +932,42 @@ function buildCalModal(){
 
 function buildRecurModal(){
   const catOpts=S.sections.map(s=>`<option value="${s.cat||s.name}">${s.name}</option>`).join('');
-  const existing=S.recurRules.map(r=>`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #e2e8f0"><div style="flex:1"><div style="font-size:13px;font-weight:700">${r.title}</div><div style="font-size:11px;color:#64748b">${r.freq} · ${r.cat} · ${r.hour>=12?(r.hour===12?12:r.hour-12)+'PM':r.hour+'AM'}</div></div><button class="btn" style="font-size:10px;padding:2px 7px;color:#c00;border-color:#fca5a5" onclick="delRecur('${r.id}')">Del</button></div>`).join('');
-  return `<div class="mbox" onclick="event.stopPropagation()" style="width:460px">
+  const existing=S.recurRules.map(r=>`
+    <div style="display:flex;align-items:flex-start;gap:8px;padding:9px 0;border-bottom:1px solid #e2e8f0">
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:700">${r.title}</div>
+        <div style="font-size:11px;color:#64748b;margin-top:2px">
+          🔁 ${r.freq} · ${r.cat} · ${r.hour>=12?(r.hour===12?12:r.hour-12)+'PM':r.hour+'AM'}
+        </div>
+        <div style="font-size:10px;margin-top:2px">
+          ${r.endDate
+            ?`<span style="background:#fef9c3;color:#92400e;padding:1px 6px;border-radius:4px;font-weight:700">ends ${r.endDate}</span>`
+            :'<span style="background:#d1fae5;color:#065f46;padding:1px 6px;border-radius:4px;font-weight:700">ongoing</span>'}
+        </div>
+      </div>
+      <button class="btn" style="font-size:10px;padding:2px 7px;color:#c00;border-color:#fca5a5" onclick="delRecur('${r.id}')">Del</button>
+    </div>`).join('');
+  return `<div class="mbox" onclick="event.stopPropagation()" style="width:480px">
     <h3>🔁 Recurring tasks</h3>
     ${existing||'<div style="font-size:13px;color:#94a3b8;margin-bottom:10px">No recurring tasks yet</div>'}
-    <div style="border-top:2px solid #e8eef8;margin:12px 0 10px;font-weight:700;font-size:13px;padding-top:12px">Add new</div>
-    <div class="mfield"><label>Title</label><input id="r-title" placeholder="e.g. Pay vendor, Weekly check-in"/></div>
+    <div style="border-top:2px solid #e8eef8;margin:12px 0 10px;font-weight:700;font-size:13px;padding-top:12px">Add new recurring task</div>
+    <div class="mfield"><label>Title</label><input id="r-title" placeholder="e.g. Pay Poncho, Weekly check-in, Friday vendor call"/></div>
     <div class="mrow">
       <div class="mfield"><label>Frequency</label><select id="r-freq">${RECUR_OPTIONS.map(o=>`<option>${o}</option>`).join('')}</select></div>
       <div class="mfield"><label>Start date</label><input id="r-start" type="date" value="${todayStr()}"/></div>
     </div>
     <div class="mrow">
-      <div class="mfield"><label>Category</label><select id="r-cat">${catOpts}</select></div>
+      <div class="mfield"><label>Category / Section</label><select id="r-cat">${catOpts}</select></div>
       <div class="mfield"><label>Time</label><select id="r-hr">${HOURS.map((h,i)=>`<option value="${h}">${HLBL[i]}</option>`).join('')}</select></div>
     </div>
-    <div class="mfield"><label>Note</label><input id="r-note" placeholder="Brief description..."/></div>
+    <div class="mfield">
+      <label>End date <span style="font-weight:400;text-transform:none;font-size:10px">(leave blank for ongoing — runs until you delete it)</span></label>
+      <input id="r-end" type="date" placeholder="Leave blank = ongoing forever"/>
+    </div>
+    <div class="mfield"><label>Note (shows on calendar)</label><input id="r-note" placeholder="Brief description..."/></div>
+    <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:12px;color:#0369a1">
+      💡 Recurring tasks show on the calendar AND in the sidebar for whichever week you're viewing.
+    </div>
     <div class="modal-btns">
       <button class="btn" onclick="closeAllModals()">Close</button>
       <button class="btn primary" onclick="saveRecur()">+ Add rule</button>
@@ -766,8 +979,18 @@ function buildAddClientModal(){
   return `<div class="mbox" onclick="event.stopPropagation()" style="width:460px">
     <h3>🏢 Add new company</h3>
     <div class="mrow">
-      <div class="mfield"><label>Company name *</label><input id="ac-name" placeholder="Acme Security"/></div>
+      <div class="mfield" style="position:relative">
+        <label>Company name *</label>
+        <input id="ac-name" placeholder="Acme Security" autocomplete="off"
+          oninput="checkDuplicateClient(this.value)"/>
+        <div id="ac-dup-box" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;
+          background:#fff;border:2px solid #f59e0b;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);
+          margin-top:3px;max-height:200px;overflow-y:auto"></div>
+      </div>
       <div class="mfield"><label>Stage</label><select id="ac-stage"><option value="">— none —</option>${STAGES.map(s=>`<option>${s}</option>`).join('')}</select></div>
+    </div>
+    <div id="ac-dup-warning" style="display:none;background:#fffbeb;border:2px solid #f59e0b;
+      border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:12px;color:#92400e">
     </div>
     <div class="mrow">
       <div class="mfield"><label>Contact</label><input id="ac-contact" placeholder="Jane Smith"/></div>
@@ -780,7 +1003,7 @@ function buildAddClientModal(){
     <div class="mfield"><label>Size</label><input id="ac-size" placeholder="e.g. 50+ guards"/></div>
     <div class="modal-btns">
       <button class="btn" onclick="closeAllModals()">Cancel</button>
-      <button class="btn primary" onclick="saveNewClient()">+ Add company</button>
+      <button class="btn primary" id="ac-save-btn" onclick="saveNewClient()">+ Add company</button>
     </div>
   </div>`;
 }
@@ -863,13 +1086,102 @@ function saveCalEv(){
 }
 function saveRecur(){
   const title=(document.getElementById('r-title').value||'').trim();if(!title)return;
-  S.recurRules.push({id:'rr'+Date.now(),title,freq:document.getElementById('r-freq').value,startDate:document.getElementById('r-start').value,cat:document.getElementById('r-cat').value,hour:parseInt(document.getElementById('r-hr').value),note:document.getElementById('r-note').value});
+  const endDateEl=document.getElementById('r-end');
+  const endDate=endDateEl&&endDateEl.value?endDateEl.value:''; // empty = ongoing
+  S.recurRules.push({
+    id:'rr'+Date.now(),title,
+    freq:document.getElementById('r-freq').value,
+    startDate:document.getElementById('r-start').value,
+    endDate,
+    cat:document.getElementById('r-cat').value,
+    hour:parseInt(document.getElementById('r-hr').value),
+    note:document.getElementById('r-note').value
+  });
   save();render();
 }
 function delRecur(id){S.recurRules=S.recurRules.filter(r=>r.id!==id);S.events=S.events.filter(e=>e.recurId!==id);save();render();}
+function checkDuplicateClient(val){
+  const box=document.getElementById('ac-dup-box');
+  const warn=document.getElementById('ac-dup-warning');
+  const saveBtn=document.getElementById('ac-save-btn');
+  if(!box||!warn)return;
+  const q=(val||'').trim().toLowerCase();
+  if(q.length<2){
+    box.style.display='none';
+    warn.style.display='none';
+    if(saveBtn){saveBtn.style.background='';saveBtn.textContent='+ Add company';}
+    return;
+  }
+
+  // Find matches: exact, starts-with, and contains
+  const exact=[];
+  const close=[];
+  S.clients.forEach(c=>{
+    const cn=c.company.toLowerCase();
+    if(cn===q) exact.push(c);
+    else if(cn.includes(q)||q.includes(cn)||fuzzyMatch(q,cn)) close.push(c);
+  });
+
+  if(exact.length>0){
+    // Hard block — exact match
+    warn.style.display='block';
+    warn.innerHTML='<strong>⛔ Exact match found:</strong> <span style="font-weight:700">'
+      +exact[0].company+'</span> already exists. '
+      +'<a href="#" onclick="event.preventDefault();closeAllModals();S.tab=\'clients\';S.selClient=S.clients.indexOf(S.clients.find(c=>c.company.toLowerCase()===\''+q+'\'));render()" style="color:#1e3a8a;font-weight:700">View existing →</a>';
+    if(saveBtn){saveBtn.style.background='#9ca3af';saveBtn.textContent='⛔ Duplicate — already exists';}
+    box.style.display='none';
+  } else if(close.length>0){
+    // Soft warning — similar names
+    warn.style.display='block';
+    warn.innerHTML='<strong>⚠️ Similar companies found:</strong> These might be duplicates — '
+      +close.slice(0,3).map(c=>'<strong>'+c.company+'</strong>').join(', ')
+      +'. You can still save if this is a different company.';
+    if(saveBtn){saveBtn.style.background='#d97706';saveBtn.textContent='⚠ Save anyway';}
+    // Show dropdown suggestions
+    box.style.display='block';
+    box.innerHTML='<div style="padding:6px 10px;font-size:10px;font-weight:700;color:#92400e;background:#fffbeb;border-bottom:1px solid #fde68a">Similar existing companies</div>'
+      +close.slice(0,5).map(c=>`<div onclick="event.stopPropagation();closeAllModals();S.tab='clients';S.selClient=S.clients.indexOf(S.clients.find(x=>x.company===\'${c.company.replace(/'/g,"\\'")}\'));render()"
+        style="padding:9px 12px;cursor:pointer;border-bottom:1px solid #f3f4f6;font-size:13px"
+        onmouseover="this.style.background='#fffbeb'" onmouseout="this.style.background='#fff'">
+        <div style="font-weight:700;color:#111">${c.company}</div>
+        <div style="font-size:11px;color:#64748b">${c.stage?'<span style=\"background:#fde68a;padding:1px 6px;border-radius:99px;font-size:10px;font-weight:700\">'+(c.stage)+'</span> ':''} ${c.contact||''}</div>
+      </div>`).join('');
+  } else {
+    // No matches — all clear
+    warn.style.display='none';
+    box.style.display='none';
+    if(saveBtn){saveBtn.style.background='';saveBtn.textContent='+ Add company';}
+  }
+}
+
+function fuzzyMatch(a,b){
+  // Simple fuzzy: check if >60% of words in a appear in b
+  const wa=a.split(/\s+/).filter(w=>w.length>2);
+  if(!wa.length)return false;
+  const hits=wa.filter(w=>b.includes(w));
+  return hits.length/wa.length>=0.6;
+}
+
 function saveNewClient(){
   const name=(document.getElementById('ac-name').value||'').trim();if(!name)return;
-  S.clients.push({company:name,size:document.getElementById('ac-size').value,address:document.getElementById('ac-addr').value,contact:document.getElementById('ac-contact').value,phone:document.getElementById('ac-phone').value,website:document.getElementById('ac-web').value,focus:document.getElementById('ac-focus').value,email:document.getElementById('ac-email').value,stage:document.getElementById('ac-stage').value,notes:[]});
+  // Block exact duplicates
+  const exactExists=S.clients.some(c=>c.company.toLowerCase()===name.toLowerCase());
+  if(exactExists){
+    alert('⛔ "'+name+'" already exists in your client list. Use the existing company record instead.');
+    return;
+  }
+  S.clients.push({
+    company:name,
+    size:document.getElementById('ac-size').value,
+    address:document.getElementById('ac-addr').value,
+    contact:document.getElementById('ac-contact').value,
+    phone:document.getElementById('ac-phone').value,
+    website:document.getElementById('ac-web').value,
+    focus:document.getElementById('ac-focus').value,
+    email:document.getElementById('ac-email').value,
+    stage:document.getElementById('ac-stage').value,
+    notes:[],files:[]
+  });
   save();S.addClientModal=null;S.selClient=S.clients.length-1;S.tab='clients';render();
 }
 function saveAddToPlanner(idx){
@@ -1057,7 +1369,7 @@ function importCSV(e){
     function findCol(field){const aliases=map[field]||[field];for(const a of aliases){const i=headers.findIndex(h=>h.includes(a));if(i>=0)return i;}return -1;}
     const cols={};Object.keys(map).forEach(k=>{cols[k]=findCol(k);});
     
-    let added=0,updated=0;
+    let added=0,updated=0,duplicates=[];
     for(let i=1;i<lines.length;i++){
       // Handle quoted CSV values
       const row=[];let cur='',inQ=false;
@@ -1071,22 +1383,80 @@ function importCSV(e){
       const newClient={company,contact:get(cols.contact),phone:get(cols.phone),email:get(cols.email),
         website:get(cols.website),address:get(cols.address),stage:get(cols.stage),
         focus:get(cols.focus),size:get(cols.size),notes:[],files:[]};
-      const existing=S.clients.findIndex(c=>c.company.toLowerCase()===company.toLowerCase());
-      if(existing>=0){
-        // Merge: only update empty fields
-        Object.keys(newClient).forEach(k=>{if(newClient[k]&&!S.clients[existing][k])S.clients[existing][k]=newClient[k];});
+      const existingIdx=S.clients.findIndex(c=>c.company.toLowerCase()===company.toLowerCase());
+      if(existingIdx>=0){
+        // Merge: only fill in empty fields — never overwrite existing data
+        Object.keys(newClient).forEach(k=>{
+          if(k!=='notes'&&k!=='files'&&newClient[k]&&!S.clients[existingIdx][k]){
+            S.clients[existingIdx][k]=newClient[k];
+          }
+        });
         updated++;
       } else {
-        S.clients.push(newClient);added++;
+        // Check fuzzy match before adding
+        const similar=S.clients.find(c=>fuzzyMatch(company.toLowerCase(),c.company.toLowerCase()));
+        if(similar){
+          duplicates.push(company+' (similar to: '+similar.company+')');
+        } else {
+          S.clients.push(newClient);added++;
+        }
       }
     }
     save();render();
-    setSyncStatus('✓ CSV: +'+added+' new, '+updated+' updated','ok');
-    // Show CSV format help if nothing imported
-    if(!added&&!updated)alert('No companies imported. Make sure your CSV has a "Company" or "Name" column header in the first row.\n\nExample columns:\nCompany, Contact, Phone, Email, Website, Address, Stage, Focus, Size');
+    setSyncStatus('✓ CSV: +'+added+' new, '+updated+' updated'+(duplicates.length?' | '+duplicates.length+' skipped':''),'ok');
+    let msg='';
+    if(added||updated) msg+='✓ '+added+' new companies added, '+updated+' existing updated.\n';
+    if(duplicates.length) msg+='\n⚠️ '+duplicates.length+' skipped (possible duplicates):\n'+duplicates.slice(0,10).join('\n');
+    if(msg) alert(msg);
+    else if(!added&&!updated) alert('No companies imported. Make sure your CSV has a "Company" or "Name" column header.\n\nExample columns:\nCompany, Contact, Phone, Email, Website, Address, Stage, Focus, Size');
   };
   reader.readAsText(file);
   e.target.value=''; // reset so same file can be re-imported
+}
+
+function showEmailSetup(){
+  // Remove any existing overlays
+  document.querySelectorAll('.moverlay').forEach(el=>el.remove());
+  const div=document.createElement('div');div.className='moverlay';
+  div.onclick=e=>{if(e.target===div)div.remove();};
+  div.innerHTML=`<div class="mbox" onclick="event.stopPropagation()" style="width:500px;max-height:85vh;overflow-y:auto">
+    <h3>📧 Daily Email Reminder Setup</h3>
+    <p style="font-size:13px;color:#374151;margin-bottom:14px;line-height:1.6">
+      You can receive a daily email every morning listing your overdue tasks, tasks due today,
+      upcoming tasks this week, and client follow-up flags — all pulled from your Google Sheet.
+    </p>
+    <div style="counter-reset:steps">
+      ${[
+        ['Open your Apps Script','Go to <a href="https://script.google.com" target="_blank" style="color:#1e3a8a;font-weight:700">script.google.com</a> and open your <strong>IUS Workspace Backup</strong> project'],
+        ['Set your email','Find the line near the top that says:<br><code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:12px">const YOUR_EMAIL = \'your@email.com\'</code><br>Replace with your actual Gmail address and save (Ctrl+S)'],
+        ['Open Triggers','In the left sidebar, click the <strong>clock icon ⏱</strong> (Triggers)'],
+        ['Add a new trigger','Click <strong>+ Add Trigger</strong> (bottom right corner)'],
+        ['Configure it','Set these options:<br>• <strong>Function:</strong> sendDailyReminder<br>• <strong>Event source:</strong> Time-driven<br>• <strong>Type:</strong> Day timer<br>• <strong>Time:</strong> 7am – 8am<br>Then click <strong>Save</strong>'],
+        ['Authorize','Google will ask you to authorize — click through and allow. This is your own script running on your own account.'],
+        ["You're done","You'll receive an email every morning at 7–8am with your daily digest. No tasks due = no email sent."]
+      ].map(([title,body],i)=>`
+        <div style="display:flex;gap:12px;padding:10px 0;border-bottom:1px solid #f1f5f9">
+          <div style="width:24px;height:24px;border-radius:50%;background:#1e3a8a;color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">${i+1}</div>
+          <div>
+            <div style="font-size:13px;font-weight:700;color:#111;margin-bottom:3px">${title}</div>
+            <div style="font-size:12px;color:#374151;line-height:1.6">${body}</div>
+          </div>
+        </div>`).join('')}
+    </div>
+    <div style="background:#f0f9ff;border:2px solid #bae6fd;border-radius:8px;padding:12px;margin-top:14px">
+      <div style="font-size:12px;font-weight:700;color:#0369a1;margin-bottom:6px">📋 What the email includes</div>
+      <div style="font-size:12px;color:#374151;line-height:1.8">
+        ⚠️ <strong>Overdue tasks</strong> — tasks past their due date<br>
+        📅 <strong>Due today</strong> — tasks due on that day<br>
+        📆 <strong>Upcoming this week</strong> — tasks due in the next 7 days<br>
+        🏢 <strong>Client follow-ups</strong> — notes flagged with "call again", "follow up", "reach back"
+      </div>
+    </div>
+    <div style="margin-top:14px;padding-top:14px;border-top:2px solid #e8eef8;text-align:right">
+      <button class="btn primary" onclick="this.closest('.moverlay').remove()">Got it</button>
+    </div>
+  </div>`;
+  document.body.appendChild(div);
 }
 
 function bindLiveInputs(){
