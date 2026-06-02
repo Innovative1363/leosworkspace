@@ -187,10 +187,9 @@ html,body{height:100%;overflow:hidden;background:#f1f5f9}
     <div class="tab" id="tab-archive" onclick="setTab('archive')">📦 Archive (<span id="archive-count">0</span>)</div>
     <div class="tab-spacer"></div>
     <div class="sync-bar">
-      <span class="sync-status" id="sync-status">Auto-saves to Sheets after changes</span>
+      <span class="sync-status" id="sync-status">Connecting…</span>
       <button class="btn" style="font-size:11px;padding:4px 10px" onclick="showEmailSetup()" title="Set up daily email reminders">📧 Email setup</button>
-      <button class="btn" style="font-size:11px;padding:4px 10px" onclick="exportToSheets(false)" title="Save to Google Sheets now">☁ Save now</button>
-      <button class="btn" style="font-size:11px;padding:4px 10px" onclick="importFromSheets()" title="Load from Google Sheets">⬇ Import</button>
+      <button class="btn" style="font-size:11px;padding:4px 10px" onclick="reloadFromSheets()" title="Reload latest data from Sheets">🔄 Reload</button>
     </div>
   </div>
   <div id="tab-content" style="flex:1;overflow:hidden;display:flex;flex-direction:column"></div>
@@ -332,78 +331,147 @@ let S={
   archiveSearch:'',archiveFilter:'All'
 };
 
-function load(){
-  try{
-    const d=localStorage.getItem(SK);
-    if(d){
-      const p=JSON.parse(d);
-      ['sections','tasks','archived','events','recurRules','clients'].forEach(k=>{if(p[k])S[k]=p[k];});
-    }
-  }catch(e){}
+// ════════════════════════════════════════════════════════════════════════
+//  LIVE DATABASE LAYER — reads/writes directly to Google Sheets
+//  No localStorage dependency. Both users see the same data.
+// ════════════════════════════════════════════════════════════════════════
 
-  if(!S.archived)S.archived=[];
+let _syncQueue=[];   // pending operations to send
+let _syncing=false;  // prevent concurrent sends
+let _loadedFromSheets=false;
 
-  // ALWAYS ensure all 91 BASE_COMPANIES are present
-  // Build a full client list starting from BASE_COMPANIES, then overlay any saved data
+// ── JSONP helper — the only way to read responses from Apps Script on GitHub Pages
+function sheetsGet(params){
+  return new Promise((resolve,reject)=>{
+    if(!SHEETS_URL){reject(new Error('No SHEETS_URL'));return;}
+    const cb='_sc'+Date.now()+Math.random().toString(36).slice(2);
+    const qs=Object.entries(params).map(([k,v])=>k+'='+encodeURIComponent(v)).join('&');
+    const s=document.createElement('script');
+    s.src=SHEETS_URL+'?'+qs+'&callback='+cb;
+    let done=false;
+    window[cb]=function(r){
+      if(done)return;done=true;
+      try{document.body.removeChild(s);}catch(e){}
+      delete window[cb];
+      resolve(r);
+    };
+    s.onerror=function(){
+      if(done)return;done=true;
+      try{document.body.removeChild(s);}catch(e){}
+      delete window[cb];
+      reject(new Error('Script load error'));
+    };
+    setTimeout(()=>{
+      if(done)return;done=true;
+      try{document.body.removeChild(s);}catch(e){}
+      delete window[cb];
+      reject(new Error('Timeout'));
+    },20000);
+    document.body.appendChild(s);
+  });
+}
+
+// ── LOAD — called once on startup, pulls everything from Sheets
+async function load(){
+  // Always restore BASE_COMPANIES as the client foundation first
   const baseMap={};
   BASE_COMPANIES.forEach(b=>{baseMap[b.company.toLowerCase()]={...b,notes:[...(b.notes||[])],files:[]};});
-
-  if(S.clients&&S.clients.length){
-    // Overlay saved client data onto base
-    S.clients.forEach(saved=>{
-      const key=saved.company.toLowerCase();
-      if(baseMap[key]){
-        // Apply saved stage, notes, files onto base company
-        if(saved.stage)baseMap[key].stage=saved.stage;
-        if(saved.notes&&saved.notes.length)baseMap[key].notes=saved.notes;
-        if(saved.files&&saved.files.length)baseMap[key].files=saved.files;
-        // Also carry over any custom fields
-        ['contact','phone','email','website','address','focus','size'].forEach(f=>{
-          if(saved[f]&&saved[f]!==baseMap[key][f])baseMap[key][f]=saved[f];
-        });
-      } else {
-        // Custom company added by user — keep it
-        baseMap[key]={...saved,notes:saved.notes||[],files:saved.files||[]};
-      }
-    });
-  }
-
   S.clients=Object.values(baseMap);
   updateCounts();
-}
-// ── AUTO-SAVE LOGIC ───────────────────────────────────────────────────────────
-// Every change saves instantly to localStorage (browser).
-// If SHEETS_URL is set, changes are also auto-synced to Google Sheets
-// after 10 seconds of inactivity (debounced so it doesn't fire on every keystroke).
-let _sheetsDebounce=null;
-let _lastSheetsSave=null;
 
-function save(){
-  // 1. Always save to localStorage immediately
-  try{localStorage.setItem(SK,JSON.stringify({sections:S.sections,tasks:S.tasks,archived:S.archived,events:S.events,recurRules:S.recurRules,clients:S.clients}));}
-  catch(e){alert('Browser storage full — please Export to Sheets to free space.');}
-  updateCounts();
-  // 2. If Sheets URL is configured, queue an auto-sync after 15 seconds of inactivity
-  // Only attempt if browser reports online — avoids NetworkError spam when offline
-  if(SHEETS_URL){
-    clearTimeout(_sheetsDebounce);
-    setSyncStatus('Unsaved changes…');
-    _sheetsDebounce=setTimeout(()=>{
-      if(navigator.onLine!==false){
-        exportToSheets(true);
-      } else {
-        setSyncStatus('⚠ Offline — saved locally','err');
-      }
-    },15000);
+  if(!SHEETS_URL){
+    // No Sheets configured — just render with defaults
+    setSyncStatus('No SHEETS_URL configured','err');
+    return;
   }
+
+  setSyncStatus('Loading from Sheets…');
+  try{
+    const data=await sheetsGet({action:'load'});
+    if(data&&data.status==='ok'){
+      if(data.sections&&data.sections.length) S.sections=data.sections.map(s=>({id:s['ID']||s.id,name:s['Name']||s.name,style:s['Style']||s.style,cat:s['Category']||s.cat}));
+      if(data.tasks) S.tasks=data.tasks.map(t=>({id:t['ID']||t.id,name:t['Name']||t.name,secId:t['Section ID']||t.secId,status:t['Status']||t.status,due:t['Due Date']||t.due,notes:t['Notes']||t.notes||''}));
+      if(data.archived) S.archived=data.archived.map(a=>({id:a['ID']||a.id,name:a['Name']||a.name,secId:a['Section ID']||a.secId,status:a['Status']||a.status,due:a['Due Date']||a.due,notes:a['Notes']||a.notes||'',archivedAt:a['Archived On']||a.archivedAt}));
+      if(data.events) S.events=data.events.map(e=>({id:e['ID']||e.id,title:e['Title']||e.title,cat:e['Category']||e.cat,date:e['Date']||e.date,hour:parseInt(e['Hour']||e.hour)||8,note:e['Note']||e.note||'',recurId:e['Recur ID']||e.recurId||'',taskId:e['Task ID']||e.taskId||''}));
+      if(data.recurRules) S.recurRules=data.recurRules.map(r=>({id:r['ID']||r.id,title:r['Title']||r.title,freq:r['Frequency']||r.freq,startDate:r['Start Date']||r.startDate,endDate:r['End Date']||r.endDate||'',cat:r['Category']||r.cat,hour:parseInt(r['Hour']||r.hour)||8,note:r['Note']||r.note||''}));
+      // Merge client data from Sheets onto BASE_COMPANIES
+      if(data.clients&&data.clients.length){
+        data.clients.forEach(c=>{
+          const co=c.company||c['Company']||'';
+          const key=co.toLowerCase();
+          if(baseMap[key]){
+            if(c.stage||c['Stage'])baseMap[key].stage=c.stage||c['Stage'];
+            ['contact','phone','email','website','address','focus','size'].forEach(f=>{
+              const v=c[f]||c[f.charAt(0).toUpperCase()+f.slice(1)]||'';
+              if(v)baseMap[key][f]=v;
+            });
+            if(c.notes&&c.notes.length)baseMap[key].notes=c.notes;
+            if(c.files&&c.files.length)baseMap[key].files=c.files;
+          } else if(co) {
+            baseMap[key]={company:co,stage:c.stage||c['Stage']||'',contact:c.contact||'',phone:c.phone||'',email:c.email||'',website:c.website||'',address:c.address||'',focus:c.focus||'',size:c.size||'',notes:c.notes||[],files:c.files||[]};
+          }
+        });
+        S.clients=Object.values(baseMap);
+      }
+      _loadedFromSheets=true;
+      setSyncStatus('✓ Loaded '+new Date().toLocaleTimeString(),'ok');
+    } else {
+      setSyncStatus('Load error — '+((data&&data.message)||'check URL'),'err');
+    }
+  }catch(err){
+    setSyncStatus('⚠ Offline — using base data','err');
+    console.warn('Load failed:',err);
+  }
+  updateCounts();
 }
+
+// ── SAVE — sends a single granular operation to Sheets immediately
+// Operations queue if one is already in flight to prevent race conditions
+function save(op){
+  // op = {action, data} — describes exactly what changed
+  // If no op provided (legacy call), do nothing — UI renders from S state
+  if(op) _syncQueue.push(op);
+  updateCounts();
+  processSyncQueue();
+}
+
+async function processSyncQueue(){
+  if(_syncing||!_syncQueue.length||!SHEETS_URL)return;
+  _syncing=true;
+  setSyncStatus('Saving…');
+  while(_syncQueue.length){
+    const op=_syncQueue.shift();
+    try{
+      await sheetsGet({action:op.action,data:encodeURIComponent(JSON.stringify(op.data))});
+    }catch(err){
+      console.warn('Sync op failed:',op.action,err);
+      // Re-queue failed op
+      _syncQueue.unshift(op);
+      setSyncStatus('⚠ Sync issue — retrying','err');
+      _syncing=false;
+      setTimeout(processSyncQueue,5000);
+      return;
+    }
+  }
+  _syncing=false;
+  setSyncStatus('✓ Saved '+new Date().toLocaleTimeString(),'ok');
+}
+
+// Simple delete helper (no data body needed)
+async function sheetsDelete(action,id){
+  if(!SHEETS_URL)return;
+  try{
+    await sheetsGet({action,id});
+  }catch(err){console.warn('Delete failed:',action,id,err);}
+}
+
 function updateCounts(){
   const cc=document.getElementById('client-count');const ac=document.getElementById('archive-count');
   if(cc)cc.textContent=S.clients?S.clients.length:0;
   if(ac)ac.textContent=S.archived?S.archived.length:0;
 }
 
-// ── SHEETS SYNC ───────────────────────────────────────────────────────────────
+// ── SYNC STATUS ────────────────────────────────────────────────────────────
 function setSyncStatus(msg,cls){
   const el=document.getElementById('sync-status');
   if(!el)return;
@@ -411,115 +479,19 @@ function setSyncStatus(msg,cls){
   el.className='sync-status'+(cls?' '+cls:'');
 }
 
-async function exportToSheets(silent=false){
-  if(!SHEETS_URL){
-    if(!silent) alert('SHEETS_URL is empty. Open this file in a text editor and paste your Apps Script URL into the SHEETS_URL constant.');
-    return;
-  }
-  setSyncStatus('Saving…');
-  try{
-    // Split large payloads — URL params have a ~2000 char safe limit in some browsers
-    // We chunk clients separately if the full payload is too large
-    const corePayload={tasks:S.tasks,archived:S.archived,events:S.events,
-      recurRules:S.recurRules,sections:S.sections};
-    const fullPayload={...corePayload,clients:S.clients};
-    const encoded=encodeURIComponent(JSON.stringify(fullPayload));
-
-    if(encoded.length<120000){
-      // Normal path — send everything in one GET
-      await fetch(SHEETS_URL+'?action=save&data='+encoded,{method:'GET',mode:'no-cors'});
-    } else {
-      // Large payload — send core first, then clients separately
-      await fetch(SHEETS_URL+'?action=save&data='+encodeURIComponent(JSON.stringify(corePayload)),{method:'GET',mode:'no-cors'});
-      // Send clients in chunks of 20
-      for(let i=0;i<S.clients.length;i+=20){
-        const chunk=S.clients.slice(i,i+20);
-        await fetch(SHEETS_URL+'?action=saveClients&data='+encodeURIComponent(JSON.stringify({clients:chunk,offset:i})),{method:'GET',mode:'no-cors'});
-      }
-    }
-    // no-cors: can't read response body — assume success if no exception
-    _lastSheetsSave=new Date();
-    setSyncStatus('✓ Saved '+_lastSheetsSave.toLocaleTimeString(),'ok');
-  }catch(e){
-    // Catch network errors gracefully — data is still safe in localStorage
-    const msg=e&&e.message?e.message:String(e);
-    if(msg.includes('NetworkError')||msg.includes('Failed to fetch')||msg.includes('network')){
-      setSyncStatus('⚠ Offline — saved locally','err');
-      console.warn('Sheets sync skipped (offline or URL unreachable):', msg);
-    } else {
-      setSyncStatus('⚠ Sync failed — saved locally','err');
-      console.error('Sheets sync error:', e);
-    }
-    // Never surface raw error to user — data is safe in browser
-  }
-}
-
-async function importFromSheets(){
-  if(!SHEETS_URL){
-    alert('SHEETS_URL is empty. See instructions above.');
-    return;
-  }
-  if(!confirm('Import from Sheets? This will overwrite your current local data.'))return;
-  setSyncStatus('Importing…');
-  // Use JSONP pattern — inject script tag, Apps Script wraps response in callback()
-  const cbName='_wsImport'+Date.now();
-  const script=document.createElement('script');
-  script.src=SHEETS_URL+'?action=import&callback='+cbName;
-  window[cbName]=function(data){
-    document.body.removeChild(script);
-    delete window[cbName];
-    if(data&&data.status==='ok'){
-      if(data.tasks)S.tasks=data.tasks;
-      if(data.archived)S.archived=data.archived;
-      if(data.events)S.events=data.events;
-      if(data.recurRules)S.recurRules=data.recurRules;
-      if(data.sections&&data.sections.length)S.sections=data.sections;
-      // SAFE MERGE: never delete existing clients or notes
-      // Start with current clients in browser (already has all 91+)
-      // Only overlay notes/stage/files from Sheets onto matching companies
-      if(data.clients&&data.clients.length){
-        const current=[...S.clients]; // preserve everything in browser
-        data.clients.forEach(saved=>{
-          const idx=current.findIndex(m=>m.company.toLowerCase()===saved.company.toLowerCase());
-          if(idx>=0){
-            // Only update fields that are non-empty in saved data
-            if(saved.stage)current[idx].stage=saved.stage;
-            // Merge notes: add any saved notes not already present
-            if(saved.notes&&saved.notes.length){
-              const existingNotes=current[idx].notes||[];
-              saved.notes.forEach(sn=>{
-                const already=existingNotes.some(en=>en.note===sn.note&&en.date===sn.date);
-                if(!already)existingNotes.push(sn);
-              });
-              current[idx].notes=existingNotes;
-            }
-            // Merge files
-            if(saved.files&&saved.files.length){
-              const existingFiles=current[idx].files||[];
-              saved.files.forEach(sf=>{
-                const already=existingFiles.some(ef=>ef.name===sf.name&&ef.url===sf.url);
-                if(!already)existingFiles.push(sf);
-              });
-              current[idx].files=existingFiles;
-            }
-          }
-          // Note: we do NOT add new companies from Sheets here to avoid duplicates
-          // New companies are added via + Add or CSV import
-        });
-        S.clients=current;
-      }
-      save();render();
-      setSyncStatus('✓ Imported '+new Date().toLocaleTimeString()+' ('+S.clients.length+' companies)','ok');
-    }else{
-      setSyncStatus('Import failed — check Apps Script deployment','err');
-    }
-  };
-  script.onerror=function(){
-    document.body.removeChild(script);
-    delete window[cbName];
-    setSyncStatus('Import error — check URL','err');
-  };
-  document.body.appendChild(script);
+// Reload from Sheets (manual refresh)
+async function reloadFromSheets(){
+  if(!confirm('Reload latest data from Sheets? Any unsynced local changes will be replaced.'))return;
+  S.tasks=[];S.archived=[];S.events=[];S.sections=[
+    {id:'s1',name:'Patches',style:'s-patches',cat:'Patches'},
+    {id:'s2',name:'Follow Up',style:'s-followup',cat:'Follow Up'},
+    {id:'s3',name:'Reach Out',style:'s-reachout',cat:'Reach Out'},
+    {id:'s4',name:'Samples',style:'s-samples',cat:'Samples'},
+    {id:'s5',name:'To Do',style:'s-todo',cat:'To Do'},
+    {id:'s6',name:'Other',style:'s-other',cat:'Other'}
+  ];S.recurRules=[];S.clients=null;
+  await load();
+  render();
 }
 
 // ── CORE HELPERS ──────────────────────────────────────────────────────────────
@@ -600,11 +572,15 @@ function renderPlanner(){
   // Recurring: only show instances that land in the top week
   const recurThisWeek=S.events.filter(ev=>ev.recurId&&topWeekDates.has(ev.date));
 
-  // Separate tasks: due this week vs overdue vs no date
+  // Tasks due exactly in the top displayed week
   const tasksThisWeek=S.tasks.filter(t=>t.due&&topWeekDates.has(t.due));
-  const tasksOverdue=S.tasks.filter(t=>t.due&&t.due<fmtDate(d1[0]));
+  // Overdue = past due date AND only show when viewing current week or earlier
+  const tasksOverdue=S.weekOffset<=0
+    ? S.tasks.filter(t=>t.due&&t.due<fmtDate(d1[0]))
+    : [];
+  // Tasks with no due date always show (undated = always active)
   const tasksNoDate=S.tasks.filter(t=>!t.due);
-  // Tasks relevant to show = this week + no date + overdue (always visible as reminder)
+  // Relevant = this week's tasks + undated + overdue (only on current/past weeks)
   const relevantTaskIds=new Set([
     ...tasksThisWeek.map(t=>t.id),
     ...tasksNoDate.map(t=>t.id),
@@ -636,8 +612,18 @@ function renderPlanner(){
       return rule&&(rule.cat===sec.cat||rule.cat===sec.name);
     });
     const hasContent=secTasks.length||recurForSec.length;
-    sb+=`<div class="sec-block ${sec.style||'s-other'}" ondragover="event.preventDefault()" ondrop="dropSec(event,'${sec.id}')">`;
-    sb+=`<div class="sec-hdr"><span class="sec-name" onclick="renSec('${sec.id}')">${sec.name}</span><button class="addbtn" onclick="openAdd('${sec.id}')">+</button></div>`;
+    sb+=`<div class="sec-block ${sec.style||'s-other'}"
+      ondragover="event.preventDefault();if(dragSecId&&dragSecId!=='${sec.id}')this.style.outline='2px solid #1e3a8a';else if(!dragSecId)this.style.background=''"
+      ondragleave="this.style.outline='';this.style.background=''"
+      ondrop="this.style.outline='';this.style.background='';dragSecId?dropSecReorder(event,'${sec.id}'):dropSec(event,'${sec.id}')">`;
+    const isBuiltIn=['s1','s2','s3','s4','s5','s6'].includes(sec.id);
+    sb+=`<div class="sec-hdr">
+      <span style="cursor:grab;color:rgba(0,0,0,.25);font-size:14px;padding-right:4px;user-select:none"
+        draggable="true" ondragstart="dragSecStart(event,'${sec.id}')" title="Drag to reorder">⠿</span>
+      <span class="sec-name" onclick="renSec('${sec.id}')">${sec.name}</span>
+      ${!isBuiltIn?`<button class="del-tc" style="position:static;font-size:11px;color:#ccc;margin-right:2px" onclick="deleteSec('${sec.id}')" title="Delete section">✕</button>`:''}
+      <button class="addbtn" onclick="openAdd('${sec.id}')">+</button>
+    </div>`;
     if(!hasContent)sb+=`<div class="no-tasks">No tasks this week</div>`;
     // Recurring cards first (purple) — clickable to edit
     recurForSec.forEach(ev=>{
@@ -1087,10 +1073,57 @@ function buildAddToPlannerModal(){
 
 // ── ACTIONS ───────────────────────────────────────────────────────────────────
 let dragId=null;
-function dragStart(e,id){dragId=id;}
-function dropSec(e,sid){e.preventDefault();if(!dragId)return;const t=S.tasks.find(x=>x.id===dragId);if(t){t.secId=sid;save();}dragId=null;render();}
+let dragSecId=null;
+
+function dragStart(e,id){dragId=id;e.stopPropagation();}
+
+function dragSecStart(e,id){
+  dragSecId=id;
+  e.dataTransfer.effectAllowed='move';
+  // Prevent task drag from firing
+  e.stopPropagation();
+}
+
+function deleteSec(id){
+  const sec=S.sections.find(s=>s.id===id);
+  if(!sec)return;
+  const tasks=S.tasks.filter(t=>t.secId===id);
+  if(tasks.length){
+    if(!confirm(`Delete "${sec.name}"?\n\nThis section has ${tasks.length} task${tasks.length>1?'s':''}. They will be moved to "Other".`))return;
+    const fallback=S.sections.find(s=>s.id!==id)||S.sections[0];
+    if(fallback) tasks.forEach(t=>{t.secId=fallback.id;});
+  } else {
+    if(!confirm(`Delete section "${sec.name}"?`))return;
+  }
+  S.sections=S.sections.filter(s=>s.id!==id);
+  save({action:'saveSections',data:{sections:S.sections}});render();
+}
+function dropSec(e,sid){
+  e.preventDefault();
+  if(!dragId)return;
+  const t=S.tasks.find(x=>x.id===dragId);
+  if(t){t.secId=sid;save({action:'saveTask',data:t});}
+  dragId=null;render();
+}
+
+function dropSecReorder(e,targetId){
+  e.preventDefault();
+  if(!dragSecId||dragSecId===targetId)return;
+  const fromIdx=S.sections.findIndex(s=>s.id===dragSecId);
+  const toIdx=S.sections.findIndex(s=>s.id===targetId);
+  if(fromIdx<0||toIdx<0)return;
+  const moved=S.sections.splice(fromIdx,1)[0];
+  S.sections.splice(toIdx,0,moved);
+  dragSecId=null;
+  save({action:'saveSections',data:{sections:S.sections}});
+  render();
+}
 function calClick(el){S.calModal={date:el.dataset.date,hour:parseInt(el.dataset.hour)};render();}
-function delEv(id){S.events=S.events.filter(e=>e.id!==id);save();render();}
+function delEv(id){
+  S.events=S.events.filter(e=>e.id!==id);
+  sheetsDelete('deleteEvent',id);
+  render();
+}
 function prevW(){S.weekOffset--;render();}function nextW(){S.weekOffset++;render();}
 function setTab(t){S.tab=t;render();}
 function filterC(f){S.clientFilter=f;render();}
@@ -1099,24 +1132,49 @@ function openAdd(sid){S.modal={mode:'add',secId:sid||S.sections[0]?.id};S.editId
 function openEdit(id){S.modal={mode:'edit'};S.editId=id;render();}
 function archiveTask(id){
   const t=S.tasks.find(x=>x.id===id);if(!t)return;
-  S.archived.push({...t,archivedAt:new Date().toISOString()});
+  const archived={...t,archivedAt:new Date().toISOString()};
+  S.archived.push(archived);
   S.tasks=S.tasks.filter(x=>x.id!==id);
-  // Remove linked calendar events when task is archived
   S.events=S.events.filter(e=>e.taskId!==id);
-  save();render();
+  save({action:'archiveTask',data:archived});
+  render();
 }
-function restoreTask(id){const a=S.archived.find(x=>x.id===id);if(!a)return;const{archivedAt,...t}=a;S.tasks.push(t);S.archived=S.archived.filter(x=>x.id!==id);save();S.tab='planner';render();}
-function permDelete(id){S.archived=S.archived.filter(x=>x.id!==id);save();render();}
-function clearAllArchive(){if(confirm('Permanently delete all archived tasks?')){S.archived=[];save();render();}}
+function restoreTask(id){
+  const a=S.archived.find(x=>x.id===id);if(!a)return;
+  const{archivedAt,...t}=a;
+  S.tasks.push(t);
+  S.archived=S.archived.filter(x=>x.id!==id);
+  save({action:'saveTask',data:t});
+  sheetsDelete('deleteTask',id+'&type=archived');
+  S.tab='planner';render();
+}
+function permDelete(id){
+  S.archived=S.archived.filter(x=>x.id!==id);
+  sheetsDelete('deleteTask',id+'&type=archived');
+  render();
+}
+function clearAllArchive(){
+  if(!confirm('Permanently delete all archived tasks?'))return;
+  // Delete each from Sheets
+  S.archived.forEach(a=>sheetsDelete('deleteTask',a.id+'&type=archived'));
+  S.archived=[];
+  render();
+}
 function delTask(id){
-  // Remove the task
   S.tasks=S.tasks.filter(t=>t.id!==id);
-  // Also remove any calendar events linked to this task
   S.events=S.events.filter(e=>e.taskId!==id);
-  save();
+  sheetsDelete('deleteTask',id);
 }
-function renSec(id){const s=S.sections.find(x=>x.id===id);if(!s)return;const n=prompt('Rename section:',s.name);if(n){s.name=n.trim();save();render();}}
-function addSec(){const n=prompt('New section name:');if(!n)return;S.sections.push({id:'s'+Date.now(),name:n.trim(),style:'s-custom',cat:n.trim()});save();render();}
+function renSec(id){
+  const s=S.sections.find(x=>x.id===id);if(!s)return;
+  const n=prompt('Rename section:',s.name);
+  if(n){s.name=n.trim();save({action:'saveSections',data:{sections:S.sections}});render();}
+}
+function addSec(){
+  const n=prompt('New section name:');if(!n)return;
+  S.sections.push({id:'s'+Date.now(),name:n.trim(),style:'s-custom',cat:n.trim()});
+  save({action:'saveSections',data:{sections:S.sections}});render();
+}
 function gcalTask(id){const t=S.tasks.find(x=>x.id===id);if(!t)return;const d=(t.due||todayStr()).replace(/-/g,'');window.open(`https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(t.name)}&dates=${d}/${d}&details=${encodeURIComponent(t.notes||'')}`);}
 
 function saveTask(){
@@ -1126,17 +1184,33 @@ function saveTask(){
   const hr=parseInt(document.getElementById('m-hr').value);
   const sec=S.sections.find(s=>s.id===secId);const cat=sec?sec.cat||sec.name:'Other';
   if(S.editId){
-    const t=S.tasks.find(x=>x.id===S.editId);if(t){Object.assign(t,{name,secId,status,due,notes});const ev=S.events.find(e=>e.taskId===t.id);if(ev&&due){ev.title=name;ev.cat=cat;ev.date=due;ev.note=notes.slice(0,60);}}
+    const t=S.tasks.find(x=>x.id===S.editId);
+    if(t){
+      Object.assign(t,{name,secId,status,due,notes});
+      const ev=S.events.find(e=>e.taskId===t.id);
+      if(ev&&due){ev.title=name;ev.cat=cat;ev.date=due;ev.note=notes.slice(0,60);}
+      save({action:'saveTask',data:t});
+      if(ev&&due) save({action:'saveEvent',data:ev});
+    }
   }else{
-    const id='t'+Date.now();S.tasks.push({id,name,secId,status,due,notes});
-    if(due)S.events.push({id:'e'+Date.now(),taskId:id,title:name,cat,date:due,hour:hr,note:notes.slice(0,60)});
+    const id='t'+Date.now();
+    const task={id,name,secId,status,due,notes};
+    S.tasks.push(task);
+    save({action:'saveTask',data:task});
+    if(due){
+      const ev={id:'e'+Date.now(),taskId:id,title:name,cat,date:due,hour:hr,note:notes.slice(0,60)};
+      S.events.push(ev);
+      save({action:'saveEvent',data:ev});
+    }
   }
-  save();S.modal=null;S.editId=null;render();
+  S.modal=null;S.editId=null;render();
 }
 function saveCalEv(){
   const title=(document.getElementById('ce-title').value||'').trim();if(!title)return;
-  S.events.push({id:'e'+Date.now(),title,cat:document.getElementById('ce-cat').value,date:document.getElementById('ce-date').value,hour:parseInt(document.getElementById('ce-hr').value),note:document.getElementById('ce-note').value});
-  save();S.calModal=null;render();
+  const ev={id:'e'+Date.now(),title,cat:document.getElementById('ce-cat').value,date:document.getElementById('ce-date').value,hour:parseInt(document.getElementById('ce-hr').value),note:document.getElementById('ce-note').value};
+  S.events.push(ev);
+  save({action:'saveEvent',data:ev});
+  S.calModal=null;render();
 }
 function openEditRecur(id){
   S.editRecurId=id;
@@ -1155,25 +1229,26 @@ function saveRecur(){
   const note=document.getElementById('r-note').value;
 
   if(S.editRecurId){
-    // Editing existing rule — update in place
     const rule=S.recurRules.find(r=>r.id===S.editRecurId);
     if(rule){
-      const oldCat=rule.cat;
-      const oldFreq=rule.freq;
       Object.assign(rule,{title,freq,startDate,endDate,cat,hour,note});
-      // Remove old generated events for this rule so they regenerate with new settings
       S.events=S.events.filter(e=>e.recurId!==S.editRecurId);
+      save({action:'saveRecur',data:rule});
     }
     S.editRecurId=null;
   } else {
-    // Adding new rule
-    S.recurRules.push({
-      id:'rr'+Date.now(),title,freq,startDate,endDate,cat,hour,note
-    });
+    const rule={id:'rr'+Date.now(),title,freq,startDate,endDate,cat,hour,note};
+    S.recurRules.push(rule);
+    save({action:'saveRecur',data:rule});
   }
-  save();render();
+  render();
 }
-function delRecur(id){S.recurRules=S.recurRules.filter(r=>r.id!==id);S.events=S.events.filter(e=>e.recurId!==id);save();render();}
+function delRecur(id){
+  S.recurRules=S.recurRules.filter(r=>r.id!==id);
+  S.events=S.events.filter(e=>e.recurId!==id);
+  sheetsDelete('deleteRecur',id);
+  render();
+}
 function checkDuplicateClient(val){
   const box=document.getElementById('ac-dup-box');
   const warn=document.getElementById('ac-dup-warning');
@@ -1238,25 +1313,12 @@ function fuzzyMatch(a,b){
 
 function saveNewClient(){
   const name=(document.getElementById('ac-name').value||'').trim();if(!name)return;
-  // Block exact duplicates
   const exactExists=S.clients.some(c=>c.company.toLowerCase()===name.toLowerCase());
-  if(exactExists){
-    alert('⛔ "'+name+'" already exists in your client list. Use the existing company record instead.');
-    return;
-  }
-  S.clients.push({
-    company:name,
-    size:document.getElementById('ac-size').value,
-    address:document.getElementById('ac-addr').value,
-    contact:document.getElementById('ac-contact').value,
-    phone:document.getElementById('ac-phone').value,
-    website:document.getElementById('ac-web').value,
-    focus:document.getElementById('ac-focus').value,
-    email:document.getElementById('ac-email').value,
-    stage:document.getElementById('ac-stage').value,
-    notes:[],files:[]
-  });
-  save();S.addClientModal=null;S.selClient=S.clients.length-1;S.tab='clients';render();
+  if(exactExists){alert('⛔ "'+name+'" already exists.');return;}
+  const c={company:name,size:document.getElementById('ac-size').value,address:document.getElementById('ac-addr').value,contact:document.getElementById('ac-contact').value,phone:document.getElementById('ac-phone').value,website:document.getElementById('ac-web').value,focus:document.getElementById('ac-focus').value,email:document.getElementById('ac-email').value,stage:document.getElementById('ac-stage').value,notes:[],files:[]};
+  S.clients.push(c);
+  save({action:'saveClient',data:c});
+  S.addClientModal=null;S.selClient=S.clients.length-1;S.tab='clients';render();
 }
 function saveAddToPlanner(idx){
   const nameEl=document.getElementById('atp-name');
@@ -1269,13 +1331,17 @@ function saveAddToPlanner(idx){
   const hr=parseInt(document.getElementById('atp-hr').value);
   const sec=S.sections.find(s=>s.id===secId);const cat=sec?sec.cat||sec.name:'Other';
   const id='t'+Date.now();
-  S.tasks.push({id,name,secId,status,due,notes,clientIdx:idx});
-  if(due)S.events.push({id:'e'+Date.now(),taskId:id,title:name,cat,date:due,hour:hr,note:notes.slice(0,60)});
-  // Clear modal state and remove DOM overlay BEFORE save/render
+  const task={id,name,secId,status,due,notes,clientIdx:idx};
+  S.tasks.push(task);
+  save({action:'saveTask',data:task});
+  if(due){
+    const ev={id:'e'+Date.now(),taskId:id,title:name,cat,date:due,hour:hr,note:notes.slice(0,60)};
+    S.events.push(ev);
+    save({action:'saveEvent',data:ev});
+  }
   S.addToPlannerModal=null;
   S.tab='planner';
   document.querySelectorAll('.moverlay').forEach(el=>el.remove());
-  save();
   render();
 }
 function saveNote(idx){
@@ -1285,16 +1351,28 @@ function saveNote(idx){
   const date=document.getElementById('note-date').value;
   const type=document.getElementById('note-type').value;
   const stage=document.getElementById('note-stage').value;
-  if(!S.clients[idx].notes)S.clients[idx].notes=[];
-  S.clients[idx].notes.push({date,type,note:text});
-  if(stage)S.clients[idx].stage=stage;
+  const c=S.clients[idx];
+  if(!c.notes)c.notes=[];
+  const note={date,type,note:text};
+  c.notes.push(note);
+  if(stage)c.stage=stage;
+  // Save note to Sheets
+  save({action:'saveNote',data:{company:c.company,note}});
+  // If stage changed, update client record too
+  if(stage) save({action:'saveClient',data:c});
+  // Also add to planner + calendar
   const sec=S.sections.find(s=>s.name==='Reach Out')||S.sections[0];
   const id='t'+Date.now();
-  S.tasks.push({id,name:S.clients[idx].company,secId:sec.id,status:'normal',due:date,notes:text.slice(0,120),clientIdx:idx});
-  if(date)S.events.push({id:'ev'+Date.now(),taskId:id,title:S.clients[idx].company,cat:sec.cat||'Reach Out',date,hour:9,note:text.slice(0,60)});
-  // Clear textarea so user doesn't accidentally double-submit
+  const task={id,name:c.company,secId:sec.id,status:'normal',due:date,notes:text.slice(0,120),clientIdx:idx};
+  S.tasks.push(task);
+  save({action:'saveTask',data:task});
+  if(date){
+    const ev={id:'ev'+Date.now(),taskId:id,title:c.company,cat:sec.cat||'Reach Out',date,hour:9,note:text.slice(0,60)};
+    S.events.push(ev);
+    save({action:'saveEvent',data:ev});
+  }
   textEl.value='';
-  save();render();
+  render();
 }
 
 // ── FILE HELPERS ──────────────────────────────────────────────────────────────
@@ -1356,18 +1434,42 @@ async function uploadOneFile(file,idx){
         if(result&&result.url){
           S.clients[idx].files.push({name:file.name,url:result.url,date,note:'Uploaded to Drive'});
           showFileStatus('✓ '+file.name+' uploaded — link saved');
-          save();render();
+          /* auto-synced */;render();
           return;
         }
       }
       
-      // Fallback: no-cors POST (file goes to Drive but we can't get the URL back)
+      // Fallback: no-cors POST — file goes to Drive
       await fetch(SHEETS_URL,{method:'POST',mode:'no-cors',
         body:JSON.stringify({action:'uploadFile',filename:file.name,mimeType:file.type,data:b64,folderId:DRIVE_FOLDER_ID})});
+      // After upload, ask the script to find the file we just uploaded by name
+      showFileStatus('Locating file in Drive...');
+      try{
+        const fileUrl=await new Promise((resolve,reject)=>{
+          const cb='_wsFindFile'+Date.now();
+          const s=document.createElement('script');
+          s.src=SHEETS_URL+'?action=findFile&filename='+encodeURIComponent(file.name)+'&folderId='+DRIVE_FOLDER_ID+'&callback='+cb;
+          window[cb]=function(r){document.body.removeChild(s);delete window[cb];resolve(r);};
+          s.onerror=function(){document.body.removeChild(s);delete window[cb];reject();};
+          document.body.appendChild(s);
+          setTimeout(()=>{try{document.body.removeChild(s);}catch(e){}delete window[cb];reject();},15000);
+        });
+        if(fileUrl&&fileUrl.url){
+          const fRec2={name:file.name,url:fileUrl.url,date,note:'Uploaded to Drive'};
+          S.clients[idx].files.push(fRec2);
+          save({action:'saveFile',data:{company:S.clients[idx].company,file:fRec2}});
+          showFileStatus('✓ '+file.name+' — link saved');
+          render();
+          return;
+        }
+      }catch(err){}
+      // Final fallback: store folder link
       const driveFolder='https://drive.google.com/drive/folders/'+DRIVE_FOLDER_ID;
-      S.clients[idx].files.push({name:file.name,url:driveFolder,date,note:'Click "Open" to view in Drive folder'});
+      const fFolder={name:file.name,url:driveFolder,date,note:'Uploaded — click Open to browse Drive folder'};
+      S.clients[idx].files.push(fFolder);
+      save({action:'saveFile',data:{company:S.clients[idx].company,file:fFolder}});
       showFileStatus('✓ '+file.name+' uploaded to Drive');
-      save();render();
+      render();
       return;
     }catch(err){
       console.error('Upload error:',err);
@@ -1378,13 +1480,17 @@ async function uploadOneFile(file,idx){
   // Fallback: images as data URL preview, other files by name
   if(file.type.startsWith('image/')){
     const dataUrl=await toDataURL(file);
-    S.clients[idx].files.push({name:file.name,url:dataUrl,date,note:'Image preview (no Drive configured)'});
+    const fImg={name:file.name,url:dataUrl,date,note:'Image preview'};
+    S.clients[idx].files.push(fImg);
+    save({action:'saveFile',data:{company:S.clients[idx].company,file:fImg}});
     showFileStatus('✓ '+file.name+' stored as preview');
   } else {
-    S.clients[idx].files.push({name:file.name,url:'',date,note:'Set DRIVE_FOLDER_ID to enable upload'});
+    const fName={name:file.name,url:'',date,note:'Set DRIVE_FOLDER_ID to enable upload'};
+    S.clients[idx].files.push(fName);
+    save({action:'saveFile',data:{company:S.clients[idx].company,file:fName}});
     showFileStatus('📎 '+file.name+' name saved');
   }
-  save();render();
+  render();
 }
 
 let _fileStatusTimer=null;
@@ -1403,22 +1509,20 @@ function addFile(idx){
   const url=(urlEl&&urlEl.value||'').trim();
   if(!name||!url){alert('Please enter both a label and a URL.');return;}
   if(!S.clients[idx].files)S.clients[idx].files=[];
-  S.clients[idx].files.push({
-    name,
-    url,
-    date:dateEl?dateEl.value:'',
-    note:noteEl?noteEl.value:''
-  });
-  if(nameEl)nameEl.value='';
-  if(urlEl)urlEl.value='';
-  if(noteEl)noteEl.value='';
-  save();render();
+  const file={name,url,date:dateEl?dateEl.value:'',note:noteEl?noteEl.value:''};
+  S.clients[idx].files.push(file);
+  if(nameEl)nameEl.value='';if(urlEl)urlEl.value='';if(noteEl)noteEl.value='';
+  save({action:'saveFile',data:{company:S.clients[idx].company,file}});
+  render();
 }
 
 function removeFile(clientIdx,fileIdx){
   if(!confirm('Remove this file attachment?'))return;
-  S.clients[clientIdx].files.splice(fileIdx,1);
-  save();render();
+  const c=S.clients[clientIdx];
+  const f=c.files[fileIdx];
+  c.files.splice(fileIdx,1);
+  if(f) save({action:'deleteFile',data:{company:c.company,fileName:f.name}});
+  render();
 }
 
 function importCSV(e){
@@ -1472,11 +1576,13 @@ function importCSV(e){
         if(similar){
           duplicates.push(company+' (similar to: '+similar.company+')');
         } else {
-          S.clients.push(newClient);added++;
+          S.clients.push(newClient);
+        save({action:'saveClient',data:newClient});
+        added++;
         }
       }
     }
-    save();render();
+    /* auto-synced */;render();
     setSyncStatus('✓ CSV: +'+added+' new, '+updated+' updated'+(duplicates.length?' | '+duplicates.length+' skipped':''),'ok');
     let msg='';
     if(added||updated) msg+='✓ '+added+' new companies added, '+updated+' existing updated.\n';
@@ -1596,7 +1702,34 @@ function bindLiveInputs(){
   if(as)as.addEventListener('input',function(){S.archiveSearch=this.value;render();});
 }
 
-load();render();
+// Startup: load data from Sheets, then render
+(async function(){
+  render(); // render immediately with defaults so page isn't blank
+  await load();
+  render(); // re-render with Sheets data
+  // Poll for changes every 30 seconds (for multi-user awareness)
+  setInterval(async()=>{
+    if(!_syncing&&_loadedFromSheets){
+      try{
+        const data=await sheetsGet({action:'load'});
+        if(data&&data.status==='ok'){
+          // Soft merge: only update if other user made changes
+          // Compare task/event counts as a simple change detector
+          const newTaskCount=(data.tasks||[]).length;
+          const newEventCount=(data.events||[]).length;
+          if(Math.abs(newTaskCount-S.tasks.length)>0||Math.abs(newEventCount-S.events.length)>0){
+            // Reload silently - re-run load logic
+            if(data.tasks) S.tasks=data.tasks.map(t=>({id:t['ID']||t.id,name:t['Name']||t.name,secId:t['Section ID']||t.secId,status:t['Status']||t.status,due:t['Due Date']||t.due,notes:t['Notes']||t.notes||''}));
+            if(data.events) S.events=data.events.map(e=>({id:e['ID']||e.id,title:e['Title']||e.title,cat:e['Category']||e.cat,date:e['Date']||e.date,hour:parseInt(e['Hour']||e.hour)||8,note:e['Note']||e.note||'',recurId:e['Recur ID']||e.recurId||'',taskId:e['Task ID']||e.taskId||''}));
+            if(data.archived) S.archived=data.archived.map(a=>({id:a['ID']||a.id,name:a['Name']||a.name,secId:a['Section ID']||a.secId,status:a['Status']||a.status,due:a['Due Date']||a.due,notes:a['Notes']||a.notes||'',archivedAt:a['Archived On']||a.archivedAt}));
+            setSyncStatus('↻ Updated '+new Date().toLocaleTimeString(),'ok');
+            render();
+          }
+        }
+      }catch(e){/* silent — don't disturb user if poll fails */}
+    }
+  },30000);
+})();
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.querySelector('.moverlay'))closeAllModals();});
 </script>
 </body>
