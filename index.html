@@ -199,7 +199,7 @@ html,body{height:100%;overflow:hidden;background:#f1f5f9}
 // ════════════════════════════════════════════════════════════════════════
 //  ▼▼▼  PASTE YOUR GOOGLE APPS SCRIPT URL HERE  ▼▼▼
 // ════════════════════════════════════════════════════════════════════════
-const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbwCl44uHUNaJXirY93BxwG7gnmovxAK5XZQ2DFq04xhW3csVEg_haiWAf5V5_K24T-c8g/exec';
+const SHEETS_URL = '';
 // ════════════════════════════════════════════════════════════════════════
 //  After you deploy your Apps Script web app, paste the URL above.
 //  It will look like:
@@ -790,19 +790,31 @@ function saveNewClient(){
   save();S.addClientModal=null;S.selClient=S.clients.length-1;S.tab='clients';render();
 }
 function saveAddToPlanner(idx){
-  const name=(document.getElementById('atp-name').value||'').trim();if(!name)return;
-  const secId=document.getElementById('atp-sec').value;const status=document.getElementById('atp-stat').value;
-  const due=document.getElementById('atp-due').value;const notes=document.getElementById('atp-notes').value;
+  const nameEl=document.getElementById('atp-name');
+  if(!nameEl)return;
+  const name=(nameEl.value||'').trim();if(!name)return;
+  const secId=document.getElementById('atp-sec').value;
+  const status=document.getElementById('atp-stat').value;
+  const due=document.getElementById('atp-due').value;
+  const notes=document.getElementById('atp-notes').value;
   const hr=parseInt(document.getElementById('atp-hr').value);
   const sec=S.sections.find(s=>s.id===secId);const cat=sec?sec.cat||sec.name:'Other';
   const id='t'+Date.now();
   S.tasks.push({id,name,secId,status,due,notes,clientIdx:idx});
   if(due)S.events.push({id:'e'+Date.now(),taskId:id,title:name,cat,date:due,hour:hr,note:notes.slice(0,60)});
-  save();S.addToPlannerModal=null;S.tab='planner';render();
+  // Clear modal state and remove DOM overlay BEFORE save/render
+  S.addToPlannerModal=null;
+  S.tab='planner';
+  document.querySelectorAll('.moverlay').forEach(el=>el.remove());
+  save();
+  render();
 }
 function saveNote(idx){
-  const text=(document.getElementById('note-text').value||'').trim();if(!text)return;
-  const date=document.getElementById('note-date').value;const type=document.getElementById('note-type').value;
+  const textEl=document.getElementById('note-text');
+  if(!textEl)return;
+  const text=(textEl.value||'').trim();if(!text)return;
+  const date=document.getElementById('note-date').value;
+  const type=document.getElementById('note-type').value;
   const stage=document.getElementById('note-stage').value;
   if(!S.clients[idx].notes)S.clients[idx].notes=[];
   S.clients[idx].notes.push({date,type,note:text});
@@ -811,6 +823,8 @@ function saveNote(idx){
   const id='t'+Date.now();
   S.tasks.push({id,name:S.clients[idx].company,secId:sec.id,status:'normal',due:date,notes:text.slice(0,120),clientIdx:idx});
   if(date)S.events.push({id:'ev'+Date.now(),taskId:id,title:S.clients[idx].company,cat:sec.cat||'Reach Out',date,hour:9,note:text.slice(0,60)});
+  // Clear textarea so user doesn't accidentally double-submit
+  textEl.value='';
   save();render();
 }
 
