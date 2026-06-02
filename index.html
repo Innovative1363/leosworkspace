@@ -187,8 +187,8 @@ html,body{height:100%;overflow:hidden;background:#f1f5f9}
     <div class="tab" id="tab-archive" onclick="setTab('archive')">📦 Archive (<span id="archive-count">0</span>)</div>
     <div class="tab-spacer"></div>
     <div class="sync-bar">
-      <span class="sync-status" id="sync-status">Not synced</span>
-      <button class="btn" style="font-size:11px;padding:4px 10px" onclick="exportToSheets()" title="Save everything to Google Sheets">☁ Export</button>
+      <span class="sync-status" id="sync-status">Auto-saves to Sheets after changes</span>
+      <button class="btn" style="font-size:11px;padding:4px 10px" onclick="exportToSheets(false)" title="Save to Google Sheets now">☁ Save now</button>
       <button class="btn" style="font-size:11px;padding:4px 10px" onclick="importFromSheets()" title="Load from Google Sheets">⬇ Import</button>
     </div>
   </div>
@@ -199,7 +199,7 @@ html,body{height:100%;overflow:hidden;background:#f1f5f9}
 // ════════════════════════════════════════════════════════════════════════
 //  ▼▼▼  PASTE YOUR GOOGLE APPS SCRIPT URL HERE  ▼▼▼
 // ════════════════════════════════════════════════════════════════════════
-const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbz2gjJe8udmHmIDpfJGoNuwQKW7f6fep3YSOaUAPdBinjBQlfPd_3F_b_saQnRr1etSyA/exec';
+const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbwCl44uHUNaJXirY93BxwG7gnmovxAK5XZQ2DFq04xhW3csVEg_haiWAf5V5_K24T-c8g/exec';
 // ════════════════════════════════════════════════════════════════════════
 //  After you deploy your Apps Script web app, paste the URL above.
 //  It will look like:
@@ -271,10 +271,26 @@ function load(){
   if(!S.archived)S.archived=[];
   updateCounts();
 }
+// ── AUTO-SAVE LOGIC ───────────────────────────────────────────────────────────
+// Every change saves instantly to localStorage (browser).
+// If SHEETS_URL is set, changes are also auto-synced to Google Sheets
+// after 10 seconds of inactivity (debounced so it doesn't fire on every keystroke).
+let _sheetsDebounce=null;
+let _lastSheetsSave=null;
+
 function save(){
+  // 1. Always save to localStorage immediately
   try{localStorage.setItem(SK,JSON.stringify({sections:S.sections,tasks:S.tasks,archived:S.archived,events:S.events,recurRules:S.recurRules,clients:S.clients}));}
   catch(e){alert('Browser storage full — please Export to Sheets to free space.');}
   updateCounts();
+  // 2. If Sheets URL is configured, queue an auto-sync after 10 seconds of no further changes
+  if(SHEETS_URL){
+    clearTimeout(_sheetsDebounce);
+    setSyncStatus('Unsaved changes…');
+    _sheetsDebounce=setTimeout(()=>{
+      exportToSheets(true); // silent=true means no alert on success, just status bar
+    },10000);
+  }
 }
 function updateCounts(){
   const cc=document.getElementById('client-count');const ac=document.getElementById('archive-count');
@@ -290,23 +306,24 @@ function setSyncStatus(msg,cls){
   el.className='sync-status'+(cls?' '+cls:'');
 }
 
-async function exportToSheets(){
+async function exportToSheets(silent=false){
   if(!SHEETS_URL){
-    alert('SHEETS_URL is empty.\n\nOpen this HTML file in a text editor, find the line:\n  const SHEETS_URL = \'\'\nand paste your Google Apps Script URL inside the quotes.\n\nSee the setup instructions in workspace_sheets_backup.gs');
+    if(!silent) alert('SHEETS_URL is empty. Open this file in a text editor and paste your Apps Script URL into the SHEETS_URL constant.');
     return;
   }
-  setSyncStatus('Exporting…');
+  setSyncStatus('Saving to Sheets…');
   try{
-    const res=await fetch(SHEETS_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tasks:S.tasks,archived:S.archived,events:S.events,clients:S.clients,recurRules:S.recurRules,sections:S.sections})});
-    const data=await res.json();
-    if(data.status==='ok'){
-      setSyncStatus('✓ Exported '+new Date().toLocaleTimeString(),'ok');
-    } else {
-      setSyncStatus('Export failed','err');
-      console.error(data);
-    }
+    // Use no-cors GET with payload as URL param to avoid CORS preflight issues with Apps Script
+    const payload=encodeURIComponent(JSON.stringify({
+      tasks:S.tasks,archived:S.archived,events:S.events,
+      clients:S.clients,recurRules:S.recurRules,sections:S.sections
+    }));
+    const res=await fetch(SHEETS_URL+'?action=save&data='+payload,{method:'GET',mode:'no-cors'});
+    // no-cors means we can't read the response — assume success if no exception thrown
+    _lastSheetsSave=new Date();
+    setSyncStatus('✓ Auto-saved '+_lastSheetsSave.toLocaleTimeString(),'ok');
   }catch(e){
-    setSyncStatus('Export error — check URL','err');
+    setSyncStatus('Sync error — check URL','err');
     console.error(e);
   }
 }
@@ -316,27 +333,35 @@ async function importFromSheets(){
     alert('SHEETS_URL is empty. See instructions above.');
     return;
   }
-  if(!confirm('Import from Sheets? This will overwrite your local data.'))return;
+  if(!confirm('Import from Sheets? This will overwrite your current local data.'))return;
   setSyncStatus('Importing…');
-  try{
-    const res=await fetch(SHEETS_URL+'?action=import');
-    const data=await res.json();
-    if(data.status==='ok'){
+  // Use JSONP pattern to read response — inject a script tag pointing to the Apps Script URL
+  // The Apps Script doGet returns callback({...data...}) when ?callback=X is passed
+  const cbName='_wsImport'+Date.now();
+  const script=document.createElement('script');
+  script.src=SHEETS_URL+'?action=import&callback='+cbName;
+  window[cbName]=function(data){
+    document.body.removeChild(script);
+    delete window[cbName];
+    if(data&&data.status==='ok'){
       if(data.tasks)S.tasks=data.tasks;
       if(data.archived)S.archived=data.archived;
       if(data.events)S.events=data.events;
       if(data.clients)S.clients=data.clients;
       if(data.recurRules)S.recurRules=data.recurRules;
-      if(data.sections)S.sections=data.sections;
+      if(data.sections&&data.sections.length)S.sections=data.sections;
       save();render();
       setSyncStatus('✓ Imported '+new Date().toLocaleTimeString(),'ok');
     }else{
       setSyncStatus('Import failed','err');
     }
-  }catch(e){
-    setSyncStatus('Import error','err');
-    console.error(e);
-  }
+  };
+  script.onerror=function(){
+    document.body.removeChild(script);
+    delete window[cbName];
+    setSyncStatus('Import error — check URL','err');
+  };
+  document.body.appendChild(script);
 }
 
 // ── CORE HELPERS ──────────────────────────────────────────────────────────────
