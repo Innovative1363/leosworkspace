@@ -339,7 +339,7 @@ let S={
 //  • Polls Sheets every 45 seconds to pick up other user's changes
 // ════════════════════════════════════════════════════════════════════════
 
-const SK='wsv6';
+// SK defined above as // SK defined above
 let _syncDebounce=null;
 let _lastSync=null;
 let _loadedFromSheets=false;
@@ -647,6 +647,10 @@ function render(){
 
 // ── PLANNER ───────────────────────────────────────────────────────────────────
 function renderPlanner(){
+  // Safety: initialize clients from BASE_COMPANIES if not loaded yet
+  if(!S.clients){
+    S.clients=BASE_COMPANIES.map(c=>({...c,notes:[...(c.notes||[])],files:[]}));
+  }
   const m1=getMonday(S.weekOffset),m2=getMonday(S.weekOffset+1);
   const d1=weekDays(m1),d2=weekDays(m2);
   // Sidebar shows ONLY tasks relevant to the TOP (primary) week displayed
@@ -840,6 +844,14 @@ function renderArchive(){
 
 // ── CLIENTS ───────────────────────────────────────────────────────────────────
 function renderClients(){
+  // Safety: if clients not loaded yet, show loading state
+  if(!S.clients||!S.clients.length){
+    return `<div class="clients-layout"><div style="flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;color:#94a3b8">
+      <div style="font-size:32px">⏳</div>
+      <div style="font-size:15px;font-weight:700">Loading clients…</div>
+      <div style="font-size:12px">Connecting to Google Sheets</div>
+    </div></div>`;
+  }
   const q=(S.clientSearch||'').toLowerCase();
   const filtered=S.clients.filter(c=>{
     const mQ=!q||c.company.toLowerCase().includes(q)||(c.contact||'').toLowerCase().includes(q)||(c.address||'').toLowerCase().includes(q);
@@ -1786,10 +1798,10 @@ function bindLiveInputs(){
 }
 
 // ── STARTUP ──────────────────────────────────────────────────────────────────
-render(); // render immediately with local/default data
+try{ render(); } catch(e){ console.error('Initial render failed:',e); }
 (async function(){
-  await load();  // load from Sheets (merges with local)
-  render();      // re-render with Sheets data
+  try{ await load(); } catch(e){ console.error('Load failed:',e); setSyncStatus('Load error — refresh page','err'); }
+  try{ render(); } catch(e){ console.error('Post-load render failed:',e); }      // re-render with Sheets data
 
   // Poll Sheets every 45s to pick up changes from other user
   setInterval(async()=>{
