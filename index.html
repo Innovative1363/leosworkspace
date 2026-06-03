@@ -1516,94 +1516,116 @@ async function uploadFiles(files,idx){
   }
 }
 async function uploadOneFile(file,idx){
-  showFileStatus('Uploading '+file.name+'...');
+  showFileStatus('Uploading '+file.name+' ('+Math.round(file.size/1024)+'KB)...');
   if(!S.clients[idx].files)S.clients[idx].files=[];
   const date=new Date().toISOString().slice(0,10);
 
-  if(SHEETS_URL&&DRIVE_FOLDER_ID){
-    try{
-      const b64=await toBase64(file);
-      // Use JSONP-style GET to upload — avoids CORS preflight entirely
-      // Encode as URL param (works for files up to ~1MB; for larger use chunks)
-      const cbName='_wsUpload'+Date.now();
-      const params=encodeURIComponent(JSON.stringify({action:'uploadFile',filename:file.name,mimeType:file.type,data:b64,folderId:DRIVE_FOLDER_ID}));
-      
-      // For small files (<800KB base64) use JSONP GET to get the real Drive URL back
-      if(params.length<800000){
-        const result=await new Promise((resolve,reject)=>{
-          const s=document.createElement('script');
-          s.src=SHEETS_URL+'?action=uploadFile&callback='+cbName+'&payload='+params;
-          window[cbName]=function(r){document.body.removeChild(s);delete window[cbName];resolve(r);};
-          s.onerror=function(){document.body.removeChild(s);delete window[cbName];reject(new Error('script error'));};
-          document.body.appendChild(s);
-          setTimeout(()=>{try{document.body.removeChild(s);}catch(e){}delete window[cbName];reject(new Error('timeout'));},30000);
-        });
-        if(result&&result.url){
-          S.clients[idx].files.push({name:file.name,url:result.url,date,note:'Uploaded to Drive'});
-          showFileStatus('✓ '+file.name+' uploaded — link saved');
-          /* auto-synced */;render();
-          return;
-        }
-      }
-      
-      // Fallback: no-cors POST — file goes to Drive
-      await fetch(SHEETS_URL,{method:'POST',mode:'no-cors',
-        body:JSON.stringify({action:'uploadFile',filename:file.name,mimeType:file.type,data:b64,folderId:DRIVE_FOLDER_ID})});
-      // After upload, ask the script to find the file we just uploaded by name
-      showFileStatus('Locating file in Drive...');
-      // Wait 3 seconds for Drive to process the file before searching
-      await new Promise(r=>setTimeout(r,3000));
-      try{
-        const fileUrl=await new Promise((resolve,reject)=>{
-          const cb='_wsFindFile'+Date.now();
-          const s=document.createElement('script');
-          s.src=SHEETS_URL+'?action=findFile&filename='+encodeURIComponent(file.name)+'&folderId='+DRIVE_FOLDER_ID+'&callback='+cb;
-          window[cb]=function(r){document.body.removeChild(s);delete window[cb];resolve(r);};
-          s.onerror=function(){document.body.removeChild(s);delete window[cb];reject(new Error('script error'));};
-          document.body.appendChild(s);
-          setTimeout(()=>{try{document.body.removeChild(s);}catch(e){}delete window[cb];reject(new Error('timeout'));},25000);
-        });
-        if(fileUrl&&fileUrl.url){
-          const fRec2={name:file.name,url:fileUrl.url,date,note:'Uploaded to Drive'};
-          S.clients[idx].files.push(fRec2);
-          save();
-          showFileStatus('✓ '+file.name+' — click Open to view');
-          render();
-          return;
-        } else if(fileUrl&&fileUrl.status==='error'){
-          console.warn('findFile error:',fileUrl.message);
-        }
-      }catch(err){console.warn('findFile failed:',err);}
-      // Final fallback: store folder link
-      const driveFolder='https://drive.google.com/drive/folders/'+DRIVE_FOLDER_ID;
-      const fFolder={name:file.name,url:driveFolder,date,note:'Uploaded — click Open to browse Drive folder'};
-      S.clients[idx].files.push(fFolder);
-      save();
-      showFileStatus('✓ '+file.name+' uploaded to Drive');
-      render();
-      return;
-    }catch(err){
-      console.error('Upload error:',err);
-      showFileStatus('Upload failed — storing as preview');
+  if(!SHEETS_URL||!DRIVE_FOLDER_ID){
+    // No Drive config — store image previews locally, log others by name
+    if(file.type.startsWith('image/')){
+      const dataUrl=await toDataURL(file);
+      S.clients[idx].files.push({name:file.name,url:dataUrl,date,note:'Local preview'});
+      save(); render();
+      showFileStatus('Stored as local preview (no Drive configured)');
+    } else {
+      S.clients[idx].files.push({name:file.name,url:'',date,note:'No Drive configured'});
+      save(); render();
+      showFileStatus('Logged filename (configure DRIVE_FOLDER_ID to upload)');
     }
+    return;
   }
 
-  // Fallback: images as data URL preview, other files by name
-  if(file.type.startsWith('image/')){
-    const dataUrl=await toDataURL(file);
-    const fImg={name:file.name,url:dataUrl,date,note:'Image preview'};
-    S.clients[idx].files.push(fImg);
-    save();
-    showFileStatus('✓ '+file.name+' stored as preview');
-  } else {
-    const fName={name:file.name,url:'',date,note:'Set DRIVE_FOLDER_ID to enable upload'};
-    S.clients[idx].files.push(fName);
-    save();
-    showFileStatus('📎 '+file.name+' name saved');
+  // Convert to base64
+  let b64;
+  try{ b64=await toBase64(file); }
+  catch(e){ showFileStatus('Read error: '+e.message); return; }
+
+  const payload=JSON.stringify({
+    action:'uploadFile',filename:file.name,
+    mimeType:file.type||'application/octet-stream',
+    data:b64,folderId:DRIVE_FOLDER_ID
+  });
+  const encoded=encodeURIComponent(payload);
+
+  // File size check — JSONP GET has URL length limits (~7500 chars safe in most browsers)
+  // base64 expands by ~33%, so ~5MB file = ~6.6MB base64 = too large for GET
+  // For files > 700KB base64, show a helpful message instead of silently failing
+  if(encoded.length > 900000){
+    // Too large for JSONP GET — store folder link and advise user
+    showFileStatus('File too large for auto-upload (>700KB) — uploading manually');
+    const driveFolder='https://drive.google.com/drive/folders/'+DRIVE_FOLDER_ID;
+    S.clients[idx].files.push({
+      name:file.name,
+      url:driveFolder,
+      date,
+      note:'Too large for auto-upload — manually drag to your Drive folder, then update the link'
+    });
+    save(); render();
+    // Open Drive folder so user can drop it themselves
+    window.open(driveFolder,'_blank');
+    return;
   }
-  render();
+
+  // JSONP upload — sends file to Drive and gets back the direct URL
+  showFileStatus('Uploading to Drive...');
+  const cbName='_wsUp'+Date.now();
+  try{
+    const result=await new Promise((resolve,reject)=>{
+      const s=document.createElement('script');
+      s.src=SHEETS_URL+'?action=uploadFile&callback='+cbName+'&payload='+encoded;
+      let done=false;
+      window[cbName]=function(r){
+        if(done)return; done=true;
+        try{document.body.removeChild(s);}catch(e){}
+        delete window[cbName];
+        resolve(r);
+      };
+      s.onerror=function(){
+        if(done)return; done=true;
+        try{document.body.removeChild(s);}catch(e){}
+        delete window[cbName];
+        reject(new Error('Script load error — check Apps Script URL'));
+      };
+      document.body.appendChild(s);
+      // 45 second timeout for large files
+      setTimeout(()=>{
+        if(done)return; done=true;
+        try{document.body.removeChild(s);}catch(e){}
+        delete window[cbName];
+        reject(new Error('Upload timed out after 45s'));
+      },45000);
+    });
+
+    if(result&&result.status==='ok'&&result.url){
+      S.clients[idx].files.push({name:file.name,url:result.url,date,note:'Drive'});
+      save(); render();
+      showFileStatus('✓ '+file.name+' uploaded to Drive');
+    } else {
+      const errMsg=(result&&result.message)||'Unknown error';
+      console.error('Upload failed:',errMsg);
+      showFileStatus('Upload failed: '+errMsg);
+      // Store with folder link as fallback
+      S.clients[idx].files.push({
+        name:file.name,
+        url:'https://drive.google.com/drive/folders/'+DRIVE_FOLDER_ID,
+        date,
+        note:'Upload error — check Drive folder manually'
+      });
+      save(); render();
+    }
+  } catch(err){
+    console.error('Upload error:',err.message);
+    showFileStatus('Upload error: '+err.message);
+    // Still log the file so it's not lost
+    S.clients[idx].files.push({
+      name:file.name,
+      url:'https://drive.google.com/drive/folders/'+DRIVE_FOLDER_ID,
+      date,
+      note:'Upload error — check Apps Script deployment'
+    });
+    save(); render();
+  }
 }
-
 let _fileStatusTimer=null;
 function showFileStatus(msg){
   setSyncStatus(msg);
