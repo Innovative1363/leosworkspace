@@ -323,7 +323,7 @@ let S={
   ],
   tasks:[],archived:[],events:[],recurRules:[],
   weekOffset:0,
-  modal:null,calModal:null,recurModal:null,addClientModal:null,addToPlannerModal:null,
+  modal:null,calModal:null,recurModal:null,addClientModal:null,addToPlannerModal:null,emailModal:null,quoteModal:null,scheduleModal:null,
   editId:null,editRecurId:null,
   clients:null,
   selClient:null,
@@ -339,7 +339,7 @@ let S={
 //  • Polls Sheets every 45 seconds to pick up other user's changes
 // ════════════════════════════════════════════════════════════════════════
 
-// SK defined above as // SK defined above
+// SK constant defined above at top of script
 let _syncDebounce=null;
 let _lastSync=null;
 let _loadedFromSheets=false;
@@ -350,7 +350,7 @@ function sheetsGet(params, timeoutMs=20000){
   return new Promise((resolve,reject)=>{
     if(!SHEETS_URL){reject(new Error('No SHEETS_URL'));return;}
     const cb='_sc'+Date.now()+Math.random().toString(36).slice(2);
-    const qs=Object.entries(params).map(([k,v])=>k+'='+v).join('&');
+    const qs=Object.entries(params).map(([k,v])=>k+'='+encodeURIComponent(v)).join('&');
     const s=document.createElement('script');
     s.src=SHEETS_URL+'?'+qs+'&callback='+cb;
     let done=false;
@@ -642,7 +642,16 @@ function render(){
   if(S.recurModal)appendModal(buildRecurModal());
   if(S.addClientModal)appendModal(buildAddClientModal());
   if(S.addToPlannerModal)appendModal(buildAddToPlannerModal());
-  setTimeout(bindLiveInputs,50);
+  if(S.emailModal)appendModal(buildEmailModal());
+  if(S.quoteModal)appendModal(buildQuoteModal());
+  if(S.scheduleModal)appendModal(buildScheduleModal());
+  setTimeout(()=>{
+    bindLiveInputs();
+    // Wire quote line total calculator
+    document.querySelectorAll('.qt-qty,.qt-price,#qt-tax').forEach(el=>{
+      el.addEventListener('input',calcQtTotal);
+    });
+  },50);
 }
 
 // ── PLANNER ───────────────────────────────────────────────────────────────────
@@ -891,7 +900,10 @@ function renderClients(){
         <div class="cd-name">${sel.company}</div>
         ${sel.stage?`<span class="stage-pill ${stageClass(sel.stage)}" style="font-size:12px;padding:3px 10px">${sel.stage}</span>`:''}
         <div class="cd-actions">
-          <button class="cd-task-btn green" onclick="S.addToPlannerModal={clientIdx:${idx}};render()">📅 Add to Planner + Calendar</button>
+          <button class="cd-task-btn green" onclick="S.addToPlannerModal={clientIdx:${idx}};render()">📅 Add to Planner</button>
+          <button class="cd-task-btn" style="background:#0369a1" onclick="S.emailModal={clientIdx:${idx}};render()">✉ Send Email</button>
+          <button class="cd-task-btn" style="background:#7c3aed" onclick="S.quoteModal={clientIdx:${idx}};render()">📄 Quote / Invoice</button>
+          <button class="cd-task-btn" style="background:#b45309" onclick="S.scheduleModal={clientIdx:${idx}};render()">🔔 Schedule Follow-Up</button>
           ${ws?`<a href="${ws}" target="_blank" style="padding:7px 12px;background:#f0f4ff;border:2px solid #1e3a8a;border-radius:8px;color:#1e3a8a;text-decoration:none;font-size:12px;font-weight:700">🌐 Website</a>`:''}
         </div>
       </div>
@@ -986,7 +998,7 @@ function appendModal(html){
   setTimeout(()=>{const f=div.querySelector('input,textarea');if(f)f.focus();},40);
 }
 function closeAllModals(){
-  S.modal=S.calModal=S.recurModal=S.addClientModal=S.addToPlannerModal=null;
+  S.modal=S.calModal=S.recurModal=S.addClientModal=S.addToPlannerModal=S.emailModal=S.quoteModal=S.scheduleModal=null;
   S.editRecurId=null;
   document.querySelectorAll('.moverlay').forEach(el=>el.remove());
   render();
@@ -1539,25 +1551,29 @@ async function uploadOneFile(file,idx){
         body:JSON.stringify({action:'uploadFile',filename:file.name,mimeType:file.type,data:b64,folderId:DRIVE_FOLDER_ID})});
       // After upload, ask the script to find the file we just uploaded by name
       showFileStatus('Locating file in Drive...');
+      // Wait 3 seconds for Drive to process the file before searching
+      await new Promise(r=>setTimeout(r,3000));
       try{
         const fileUrl=await new Promise((resolve,reject)=>{
           const cb='_wsFindFile'+Date.now();
           const s=document.createElement('script');
           s.src=SHEETS_URL+'?action=findFile&filename='+encodeURIComponent(file.name)+'&folderId='+DRIVE_FOLDER_ID+'&callback='+cb;
           window[cb]=function(r){document.body.removeChild(s);delete window[cb];resolve(r);};
-          s.onerror=function(){document.body.removeChild(s);delete window[cb];reject();};
+          s.onerror=function(){document.body.removeChild(s);delete window[cb];reject(new Error('script error'));};
           document.body.appendChild(s);
-          setTimeout(()=>{try{document.body.removeChild(s);}catch(e){}delete window[cb];reject();},15000);
+          setTimeout(()=>{try{document.body.removeChild(s);}catch(e){}delete window[cb];reject(new Error('timeout'));},25000);
         });
         if(fileUrl&&fileUrl.url){
           const fRec2={name:file.name,url:fileUrl.url,date,note:'Uploaded to Drive'};
           S.clients[idx].files.push(fRec2);
           save();
-          showFileStatus('✓ '+file.name+' — link saved');
+          showFileStatus('✓ '+file.name+' — click Open to view');
           render();
           return;
+        } else if(fileUrl&&fileUrl.status==='error'){
+          console.warn('findFile error:',fileUrl.message);
         }
-      }catch(err){}
+      }catch(err){console.warn('findFile failed:',err);}
       // Final fallback: store folder link
       const driveFolder='https://drive.google.com/drive/folders/'+DRIVE_FOLDER_ID;
       const fFolder={name:file.name,url:driveFolder,date,note:'Uploaded — click Open to browse Drive folder'};
@@ -1776,7 +1792,389 @@ function exportClientsCSV(){
   setSyncStatus('✓ Exported '+S.clients.length+' clients to CSV','ok');
 }
 
+// ── EMAIL MODAL ───────────────────────────────────────────────────────────────
+function buildEmailModal(){
+  const m=S.emailModal; const c=S.clients[m.clientIdx];
+  const lastNote=c.notes&&c.notes.length?c.notes[c.notes.length-1].note:'';
+  return `<div class="mbox" onclick="event.stopPropagation()" style="width:520px">
+    <h3>✉ Send Email — ${c.company}</h3>
+    <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#0369a1">
+      📤 Sends from <strong>iuniformsolutions@gmail.com</strong> via your Apps Script
+    </div>
+    <div class="mfield"><label>To (email)</label>
+      <input id="em-to" value="${c.email||''}" placeholder="recipient@company.com"/>
+    </div>
+    <div class="mfield"><label>CC (optional)</label>
+      <input id="em-cc" placeholder="e.g. yourself@gmail.com"/>
+    </div>
+    <div class="mfield"><label>Subject</label>
+      <input id="em-subj" value="IUS Uniforms — ${c.company.replace(/"/g,'&quot;')}" placeholder="Subject line"/>
+    </div>
+    <div class="mfield"><label>Message</label>
+      <textarea id="em-body" style="min-height:140px" data-clientidx="${m.clientIdx}"></textarea>
+    </div>
+    <div class="mfield"><label>Log as note</label>
+      <select id="em-log" class="ani">
+        <option value="yes">Yes — add to activity history</option>
+        <option value="no">No — send only</option>
+      </select>
+    </div>
+    <div class="modal-btns">
+      <button class="btn" onclick="closeAllModals()">Cancel</button>
+      <button class="btn primary" onclick="sendClientEmail(${m.clientIdx})">✉ Send Email</button>
+    </div>
+  </div>`;
+}
+
+async function sendClientEmail(idx){
+  const to=(document.getElementById('em-to').value||'').trim();
+  const cc=(document.getElementById('em-cc').value||'').trim();
+  const subj=(document.getElementById('em-subj').value||'').trim();
+  const body=(document.getElementById('em-body').value||'').trim();
+  const logIt=document.getElementById('em-log').value==='yes';
+  if(!to){alert('Please enter a recipient email address.');return;}
+  if(!subj){alert('Please enter a subject line.');return;}
+  if(!SHEETS_URL){alert('SHEETS_URL not configured — cannot send.');return;}
+  setSyncStatus('Sending…');
+  const btn=document.querySelector('.moverlay .btn.primary');
+  if(btn){btn.disabled=true;btn.textContent='Sending…';}
+  try{
+    const result=await sheetsGet({
+      action:'sendEmail',
+      data:encodeURIComponent(JSON.stringify({to,cc,subject:subj,body,company:S.clients[idx].company}))
+    });
+    if(result&&result.status==='ok'){
+      setSyncStatus('✓ Email sent to '+to,'ok');
+      // Log as note if requested
+      if(logIt){
+        const c=S.clients[idx];
+        if(!c.notes)c.notes=[];
+        c.notes.push({date:new Date().toISOString().slice(0,10),type:'Email',note:'Email sent: '+subj});
+        save();
+      }
+      closeAllModals();
+    } else {
+      setSyncStatus('⚠ Send failed — '+(result&&result.message||'check Apps Script'),'err');
+      if(btn){btn.disabled=false;btn.textContent='✉ Send Email';}
+    }
+  }catch(err){
+    setSyncStatus('⚠ Send error — check URL','err');
+    if(btn){btn.disabled=false;btn.textContent='✉ Send Email';}
+    console.error('Email send error:',err);
+  }
+}
+
+// ── QUOTE/INVOICE MODAL ───────────────────────────────────────────────────────
+function buildQuoteModal(){
+  const m=S.quoteModal; const c=S.clients[m.clientIdx];
+  const today=todayStr();
+  const quoteNum='IUS-'+Date.now().toString().slice(-6);
+  return `<div class="mbox" onclick="event.stopPropagation()" style="width:560px;max-height:90vh">
+    <h3>📄 Quote / Invoice — ${c.company}</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+      <div class="mfield"><label>Quote #</label><input id="qt-num" value="${quoteNum}"/></div>
+      <div class="mfield"><label>Date</label><input id="qt-date" type="date" value="${today}"/></div>
+      <div class="mfield"><label>Attention (name)</label><input id="qt-attn" value="${c.contact?c.contact.split('/')[0].trim():''}"/></div>
+      <div class="mfield"><label>Send to (email)</label><input id="qt-email" value="${c.email||''}"/></div>
+    </div>
+    <div style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;margin-bottom:6px">Line Items</div>
+    <div id="qt-lines">
+      <div class="qt-line" style="display:grid;grid-template-columns:3fr 1fr 1fr 24px;gap:6px;margin-bottom:5px">
+        <input class="ani qt-desc" placeholder="Description (e.g. Polo Shirt - Navy S/M/L)" style="font-size:12px"/>
+        <input class="ani qt-qty" placeholder="Qty" type="number" min="1" value="1" style="font-size:12px"/>
+        <input class="ani qt-price" placeholder="Unit $" type="number" step="0.01" style="font-size:12px"/>
+        <span></span>
+      </div>
+    </div>
+    <button onclick="addQtLine()" style="font-size:11px;padding:4px 10px;border:1.5px dashed #94a3b8;border-radius:6px;background:#f8fafc;cursor:pointer;margin-bottom:10px">+ Add line</button>
+    <div style="display:flex;justify-content:flex-end;gap:20px;padding:10px 0;border-top:2px solid #e2e8f0;margin-bottom:10px">
+      <span style="font-size:12px;color:#64748b">Subtotal: <strong id="qt-subtotal">$0.00</strong></span>
+      <span style="font-size:12px;color:#64748b">Tax (optional): <input id="qt-tax" type="number" min="0" max="30" value="0" step="0.5" style="width:50px;font-size:12px;padding:2px 6px;border:1.5px solid #cbd5e1;border-radius:4px"/>%</span>
+      <span style="font-size:13px;font-weight:700;color:#111">Total: <strong id="qt-total">$0.00</strong></span>
+    </div>
+    <div class="mfield"><label>Notes / terms</label>
+      <textarea id="qt-notes" style="min-height:60px">Thank you for the opportunity. Quote valid for 30 days. Free shipping on orders over $200.</textarea>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+      <label style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase">Send as email</label>
+      <select id="qt-send" class="ani" style="flex:1;font-size:12px">
+        <option value="email">Email PDF to client</option>
+        <option value="preview">Preview only (don't send)</option>
+      </select>
+    </div>
+    <div class="modal-btns">
+      <button class="btn" onclick="closeAllModals()">Cancel</button>
+      <button class="btn primary" style="background:#7c3aed;border-color:#7c3aed" onclick="generateQuote(${m.clientIdx})">📄 Generate & Send</button>
+    </div>
+  </div>`;
+}
+
+function addQtLine(){
+  const container=document.getElementById('qt-lines');
+  if(!container)return;
+  const div=document.createElement('div');
+  div.className='qt-line';
+  div.style.cssText='display:grid;grid-template-columns:3fr 1fr 1fr 24px;gap:6px;margin-bottom:5px';
+  div.innerHTML=`<input class="ani qt-desc" placeholder="Description" style="font-size:12px"/>
+    <input class="ani qt-qty" placeholder="Qty" type="number" min="1" value="1" style="font-size:12px"/>
+    <input class="ani qt-price" placeholder="Unit $" type="number" step="0.01" style="font-size:12px"/>
+    <button onclick="this.parentElement.remove();calcQtTotal()" style="background:none;border:none;cursor:pointer;font-size:14px;color:#94a3b8;padding:0">✕</button>`;
+  container.appendChild(div);
+  div.querySelectorAll('input').forEach(i=>i.addEventListener('input',calcQtTotal));
+}
+
+function calcQtTotal(){
+  const lines=document.querySelectorAll('.qt-line');
+  let sub=0;
+  lines.forEach(l=>{
+    const qty=parseFloat(l.querySelector('.qt-qty')?.value)||0;
+    const price=parseFloat(l.querySelector('.qt-price')?.value)||0;
+    sub+=qty*price;
+  });
+  const tax=parseFloat(document.getElementById('qt-tax')?.value)||0;
+  const total=sub*(1+tax/100);
+  const el_s=document.getElementById('qt-subtotal');
+  const el_t=document.getElementById('qt-total');
+  if(el_s)el_s.textContent='$'+sub.toFixed(2);
+  if(el_t)el_t.textContent='$'+total.toFixed(2);
+}
+
+async function generateQuote(idx){
+  const c=S.clients[idx];
+  const num=(document.getElementById('qt-num').value||'').trim();
+  const date=document.getElementById('qt-date').value;
+  const attn=(document.getElementById('qt-attn').value||'').trim();
+  const email=(document.getElementById('qt-email').value||'').trim();
+  const notes=(document.getElementById('qt-notes').value||'').trim();
+  const taxPct=parseFloat(document.getElementById('qt-tax').value)||0;
+  const sendMode=document.getElementById('qt-send').value;
+
+  // Collect line items
+  const lines=[];
+  document.querySelectorAll('.qt-line').forEach(l=>{
+    const desc=(l.querySelector('.qt-desc')?.value||'').trim();
+    const qty=parseFloat(l.querySelector('.qt-qty')?.value)||0;
+    const price=parseFloat(l.querySelector('.qt-price')?.value)||0;
+    if(desc&&qty&&price) lines.push({desc,qty,price,total:qty*price});
+  });
+  if(!lines.length){alert('Please add at least one line item.');return;}
+
+  const subtotal=lines.reduce((s,l)=>s+l.total,0);
+  const taxAmt=subtotal*taxPct/100;
+  const total=subtotal+taxAmt;
+
+  // Build HTML email body
+  const tableRows=lines.map(l=>`
+    <tr><td style="padding:8px 12px;border-bottom:1px solid #f1f5f9">${l.desc}</td>
+    <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;text-align:center">${l.qty}</td>
+    <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;text-align:right">$${l.price.toFixed(2)}</td>
+    <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;text-align:right;font-weight:700">$${l.total.toFixed(2)}</td></tr>`).join('');
+
+  const htmlBody=`<div style="font-family:Arial,sans-serif;max-width:650px;margin:0 auto;border:2px solid #e2e8f0;border-radius:12px;overflow:hidden">
+    <div style="background:#1e3a5f;color:#fff;padding:24px 28px">
+      <div style="font-size:22px;font-weight:700">Innovative Uniform Solutions</div>
+      <div style="font-size:13px;opacity:.8;margin-top:4px">iuniformsolutions.com · iuniformsolutions@gmail.com</div>
+    </div>
+    <div style="padding:24px 28px;background:#fff">
+      <div style="display:flex;justify-content:space-between;margin-bottom:20px">
+        <div><div style="font-size:22px;font-weight:700;color:#1e3a8a">QUOTE</div>
+          <div style="font-size:12px;color:#64748b;margin-top:4px"># ${num}</div></div>
+        <div style="text-align:right"><div style="font-size:12px;color:#64748b">Date</div>
+          <div style="font-weight:700">${date}</div></div>
+      </div>
+      <div style="margin-bottom:20px;padding:14px;background:#f8fafc;border-radius:8px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#94a3b8;margin-bottom:6px">Prepared For</div>
+        <div style="font-weight:700;font-size:15px">${c.company}</div>
+        ${attn?'<div style="color:#374151">Attn: '+attn+'</div>':''}
+        ${c.address?'<div style="font-size:12px;color:#64748b">'+c.address+'</div>':''}
+      </div>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:16px">
+        <thead><tr style="background:#1e3a5f;color:#fff">
+          <th style="padding:10px 12px;text-align:left">Description</th>
+          <th style="padding:10px 12px;text-align:center">Qty</th>
+          <th style="padding:10px 12px;text-align:right">Unit Price</th>
+          <th style="padding:10px 12px;text-align:right">Total</th>
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+      <div style="text-align:right;margin-bottom:16px">
+        <div style="font-size:13px;color:#64748b;margin-bottom:4px">Subtotal: $${subtotal.toFixed(2)}</div>
+        ${taxPct?'<div style="font-size:13px;color:#64748b;margin-bottom:4px">Tax ('+taxPct+'%): $'+taxAmt.toFixed(2)+'</div>':''}
+        <div style="font-size:18px;font-weight:700;color:#1e3a8a;border-top:2px solid #e2e8f0;padding-top:8px">Total: $${total.toFixed(2)}</div>
+      </div>
+      ${notes?'<div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:12px;font-size:12px;color:#374151">'+notes+'</div>':''}
+    </div>
+  </div>`;
+
+  if(sendMode==='preview'){
+    // Show preview in new window
+    const w=window.open('','_blank');
+    w.document.write(htmlBody);
+    w.document.close();
+    // Log it
+    if(!c.notes)c.notes=[];
+    c.notes.push({date,type:'Quote',note:'Quote #'+num+' generated. Total: $'+total.toFixed(2)});
+    save();render();
+    setSyncStatus('✓ Quote preview opened','ok');
+    closeAllModals();
+    return;
+  }
+
+  if(!email){alert('Please enter a recipient email address.');return;}
+  if(!SHEETS_URL){alert('SHEETS_URL not configured — cannot send.');return;}
+
+  const btn=document.querySelector('.moverlay .btn.primary');
+  if(btn){btn.disabled=true;btn.textContent='Sending…';}
+  setSyncStatus('Sending quote…');
+
+  try{
+    const result=await sheetsGet({
+      action:'sendEmail',
+      data:encodeURIComponent(JSON.stringify({
+        to:email,subject:'Quote #'+num+' — Innovative Uniform Solutions',
+        htmlBody,company:c.company,isHtml:true
+      }))
+    });
+    if(result&&result.status==='ok'){
+      // Log it
+      if(!c.notes)c.notes=[];
+      c.notes.push({date,type:'Quote',note:'Quote #'+num+' emailed to '+email+'. Total: $'+total.toFixed(2)});
+      save();
+      setSyncStatus('✓ Quote sent to '+email,'ok');
+      closeAllModals();
+    } else {
+      setSyncStatus('⚠ Send failed — '+(result&&result.message||'check Apps Script'),'err');
+      if(btn){btn.disabled=false;btn.textContent='📄 Generate & Send';}
+    }
+  }catch(err){
+    setSyncStatus('⚠ Send error','err');
+    if(btn){btn.disabled=false;btn.textContent='📄 Generate & Send';}
+  }
+}
+
+// ── FOLLOW-UP SCHEDULER MODAL ─────────────────────────────────────────────────
+function buildScheduleModal(){
+  const m=S.scheduleModal; const c=S.clients[m.clientIdx];
+  // Find existing follow-up flags from notes
+  const flagKeywords=['follow up','call again','reach back','try again','check back','call back'];
+  const flags=c.notes?c.notes.filter(n=>flagKeywords.some(k=>(n.note||'').toLowerCase().includes(k))):[];
+  const lastFlag=flags.length?flags[flags.length-1]:null;
+  // Suggest a date 1 week from today
+  const d=new Date();d.setDate(d.getDate()+7);
+  const suggested=d.toISOString().slice(0,10);
+
+  return `<div class="mbox" onclick="event.stopPropagation()" style="width:480px">
+    <h3>🔔 Schedule Follow-Up — ${c.company}</h3>
+    ${lastFlag?`<div style="background:#fffbeb;border:1.5px solid #fbbf24;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px">
+      <div style="font-weight:700;color:#92400e;margin-bottom:3px">📌 Existing follow-up flag found:</div>
+      <div style="color:#374151">"${lastFlag.note.slice(0,120)}"</div>
+      <div style="color:#94a3b8;margin-top:3px">${lastFlag.date||'no date'}</div>
+    </div>`:''}
+    <div class="mrow">
+      <div class="mfield"><label>Follow-up date</label>
+        <input id="sc-date" type="date" value="${suggested}"/>
+      </div>
+      <div class="mfield"><label>Time preference</label>
+        <select id="sc-time" class="ani">
+          <option value="morning">Morning (8–10am)</option>
+          <option value="midday">Midday (11am–1pm)</option>
+          <option value="afternoon">Afternoon (2–4pm)</option>
+        </select>
+      </div>
+    </div>
+    <div class="mfield"><label>Method</label>
+      <select id="sc-method" class="ani">
+        <option value="Phone Call">Phone Call</option>
+        <option value="Email">Email</option>
+        <option value="Visit">In-person visit</option>
+        <option value="Text">Text message</option>
+      </select>
+    </div>
+    <div class="mfield"><label>Reminder note</label>
+      <textarea id="sc-note" style="min-height:80px" placeholder="What to discuss / what to mention...">${lastFlag?lastFlag.note.slice(0,200):''}</textarea>
+    </div>
+    <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#0369a1">
+      <strong>What this does:</strong> Adds a task + calendar block to your planner on the selected date, logs a note, and optionally sends you a reminder email on that morning.
+    </div>
+    <div class="mfield"><label>Send reminder email to you?</label>
+      <select id="sc-email" class="ani">
+        <option value="yes">Yes — email me on that morning</option>
+        <option value="no">No — planner reminder only</option>
+      </select>
+    </div>
+    <div class="modal-btns">
+      <button class="btn" onclick="closeAllModals()">Cancel</button>
+      <button class="btn primary" style="background:#b45309;border-color:#b45309" onclick="saveFollowUpSchedule(${m.clientIdx})">🔔 Schedule Follow-Up</button>
+    </div>
+  </div>`;
+}
+
+async function saveFollowUpSchedule(idx){
+  const c=S.clients[idx];
+  const date=document.getElementById('sc-date').value;
+  const method=document.getElementById('sc-method').value;
+  const note=(document.getElementById('sc-note').value||'').trim();
+  const time=document.getElementById('sc-time').value;
+  const sendEmail=document.getElementById('sc-email').value==='yes';
+  if(!date){alert('Please select a follow-up date.');return;}
+
+  const hourMap={morning:8,midday:11,afternoon:14};
+  const hour=hourMap[time]||9;
+
+  // Add to planner
+  const sec=S.sections.find(s=>s.name==='Reach Out')||S.sections.find(s=>s.name==='Follow Up')||S.sections[0];
+  const taskId='t'+Date.now();
+  const taskName='Follow up — '+c.company+' ('+method+')';
+  const task={id:taskId,name:taskName,secId:sec.id,status:'normal',due:date,notes:note.slice(0,120)||'Follow-up scheduled'};
+  S.tasks.push(task);
+  // Add calendar event
+  const ev={id:'e'+Date.now(),taskId,title:taskName,cat:sec.cat||'Reach Out',date,hour,note:note.slice(0,60)};
+  S.events.push(ev);
+  // Log note
+  if(!c.notes)c.notes=[];
+  c.notes.push({date:todayStr(),type:'Follow Up',note:'Follow-up scheduled for '+date+' via '+method+(note?': '+note.slice(0,100):'')});
+  save();
+
+  // Send reminder email via Apps Script if requested
+  if(sendEmail&&SHEETS_URL){
+    try{
+      await sheetsGet({
+        action:'sendEmail',
+        data:encodeURIComponent(JSON.stringify({
+          to:'iuniformsolutions@gmail.com',
+          sendAt:date,
+          subject:'Follow-Up Reminder: '+c.company+' - '+date,
+          body:'Follow-up reminder for '+c.company+'.\n\nMethod: '+method+'\nDate: '+date+'\nTime: '+time+'\n\n'+(note||'No additional notes.'),
+          company:c.company
+        }))
+      });
+      setSyncStatus('✓ Scheduled + reminder email sent','ok');
+    }catch(e){
+      setSyncStatus('✓ Scheduled (email send failed)','ok');
+    }
+  } else {
+    setSyncStatus('✓ Follow-up added to planner','ok');
+  }
+  closeAllModals();
+}
+
 function bindLiveInputs(){
+  // Populate email body textarea safely without inline script tags
+  const emBody=document.getElementById('em-body');
+  if(emBody&&emBody.dataset.clientidx!==undefined){
+    const cidx=parseInt(emBody.dataset.clientidx);
+    const ec=S.clients[cidx];
+    if(ec){
+      const firstName=ec.contact?ec.contact.split('/')[0].trim().split(' ')[0]:'there';
+      const lastNote=ec.notes&&ec.notes.length?ec.notes[ec.notes.length-1].note:'';
+      emBody.value='Hi '+firstName+',\n\n'
+        +'I wanted to follow up regarding uniform solutions for '+ec.company+'.\n\n'
+        +'We specialize in custom security uniforms, patches, embroidery, and tactical gear at competitive pricing.\n\n'
+        +(lastNote?'Re our last conversation: '+lastNote.slice(0,120)+'\n\n':'')
+        +'Please let me know if you have any questions or would like a sample.\n\n'
+        +'Best regards,\nLeo\nInnovative Uniform Solutions\niuniformsolutions.com';
+    }
+  }
   const cs=document.getElementById('csearch-input');
   if(cs)cs.addEventListener('input',function(){
     S.clientSearch=this.value;
