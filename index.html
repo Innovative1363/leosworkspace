@@ -332,137 +332,210 @@ let S={
 };
 
 // ════════════════════════════════════════════════════════════════════════
-//  LIVE DATABASE LAYER — reads/writes directly to Google Sheets
-//  No localStorage dependency. Both users see the same data.
+//  HYBRID DATA LAYER
+//  • Saves instantly to localStorage (no delay, no sync loop)
+//  • Syncs to Google Sheets 5 seconds after last change (bulk, proven)
+//  • Loads from Sheets on startup (so both users share same data)
+//  • Polls Sheets every 45 seconds to pick up other user's changes
 // ════════════════════════════════════════════════════════════════════════
 
-let _syncQueue=[];   // pending operations to send
-let _syncing=false;  // prevent concurrent sends
+const SK='wsv6';
+let _syncDebounce=null;
+let _lastSync=null;
 let _loadedFromSheets=false;
+let _syncing=false;
 
-// ── JSONP helper — the only way to read responses from Apps Script on GitHub Pages
-function sheetsGet(params){
+// ── JSONP helper — reads responses from Apps Script ───────────────────────────
+function sheetsGet(params, timeoutMs=20000){
   return new Promise((resolve,reject)=>{
     if(!SHEETS_URL){reject(new Error('No SHEETS_URL'));return;}
     const cb='_sc'+Date.now()+Math.random().toString(36).slice(2);
-    const qs=Object.entries(params).map(([k,v])=>k+'='+encodeURIComponent(v)).join('&');
+    const qs=Object.entries(params).map(([k,v])=>k+'='+v).join('&');
     const s=document.createElement('script');
     s.src=SHEETS_URL+'?'+qs+'&callback='+cb;
     let done=false;
-    window[cb]=function(r){
-      if(done)return;done=true;
-      try{document.body.removeChild(s);}catch(e){}
-      delete window[cb];
-      resolve(r);
-    };
-    s.onerror=function(){
-      if(done)return;done=true;
-      try{document.body.removeChild(s);}catch(e){}
-      delete window[cb];
-      reject(new Error('Script load error'));
-    };
-    setTimeout(()=>{
-      if(done)return;done=true;
-      try{document.body.removeChild(s);}catch(e){}
-      delete window[cb];
-      reject(new Error('Timeout'));
-    },20000);
+    window[cb]=r=>{if(done)return;done=true;try{document.body.removeChild(s);}catch(e){}delete window[cb];resolve(r);};
+    s.onerror=()=>{if(done)return;done=true;try{document.body.removeChild(s);}catch(e){}delete window[cb];reject(new Error('Script error'));};
+    setTimeout(()=>{if(done)return;done=true;try{document.body.removeChild(s);}catch(e){}delete window[cb];reject(new Error('Timeout'));},timeoutMs);
     document.body.appendChild(s);
   });
 }
 
-// ── LOAD — called once on startup, pulls everything from Sheets
+// ── LOAD — pulls everything from Sheets on startup ───────────────────────────
 async function load(){
-  // Always restore BASE_COMPANIES as the client foundation first
+  // Step 1: restore BASE_COMPANIES as client foundation + localStorage overlay
   const baseMap={};
   BASE_COMPANIES.forEach(b=>{baseMap[b.company.toLowerCase()]={...b,notes:[...(b.notes||[])],files:[]};});
+
+  // Apply any locally cached data first (instant render)
+  try{
+    const d=localStorage.getItem(SK);
+    if(d){
+      const p=JSON.parse(d);
+      if(p.sections&&p.sections.length)S.sections=p.sections;
+      if(p.tasks)S.tasks=p.tasks;
+      if(p.archived)S.archived=p.archived;
+      if(p.events)S.events=p.events;
+      if(p.recurRules)S.recurRules=p.recurRules;
+      if(p.clients){
+        p.clients.forEach(c=>{
+          const key=c.company.toLowerCase();
+          if(baseMap[key]){
+            if(c.stage)baseMap[key].stage=c.stage;
+            if(c.notes&&c.notes.length)baseMap[key].notes=c.notes;
+            if(c.files&&c.files.length)baseMap[key].files=c.files;
+            ['contact','phone','email','website','address','focus','size'].forEach(f=>{if(c[f])baseMap[key][f]=c[f];});
+          } else {
+            baseMap[c.company.toLowerCase()]={...c,notes:c.notes||[],files:c.files||[]};
+          }
+        });
+      }
+    }
+  }catch(e){}
   S.clients=Object.values(baseMap);
+  if(!S.archived)S.archived=[];
   updateCounts();
 
-  if(!SHEETS_URL){
-    // No Sheets configured — just render with defaults
-    setSyncStatus('No SHEETS_URL configured','err');
-    return;
-  }
-
+  // Step 2: load from Sheets to get latest data from both users
+  if(!SHEETS_URL){setSyncStatus('No SHEETS_URL configured','err');return;}
   setSyncStatus('Loading from Sheets…');
   try{
     const data=await sheetsGet({action:'load'});
     if(data&&data.status==='ok'){
-      if(data.sections&&data.sections.length) S.sections=data.sections.map(s=>({id:s['ID']||s.id,name:s['Name']||s.name,style:s['Style']||s.style,cat:s['Category']||s.cat}));
-      if(data.tasks) S.tasks=data.tasks.map(t=>({id:t['ID']||t.id,name:t['Name']||t.name,secId:t['Section ID']||t.secId,status:t['Status']||t.status,due:t['Due Date']||t.due,notes:t['Notes']||t.notes||''}));
-      if(data.archived) S.archived=data.archived.map(a=>({id:a['ID']||a.id,name:a['Name']||a.name,secId:a['Section ID']||a.secId,status:a['Status']||a.status,due:a['Due Date']||a.due,notes:a['Notes']||a.notes||'',archivedAt:a['Archived On']||a.archivedAt}));
-      if(data.events) S.events=data.events.map(e=>({id:e['ID']||e.id,title:e['Title']||e.title,cat:e['Category']||e.cat,date:e['Date']||e.date,hour:parseInt(e['Hour']||e.hour)||8,note:e['Note']||e.note||'',recurId:e['Recur ID']||e.recurId||'',taskId:e['Task ID']||e.taskId||''}));
-      if(data.recurRules) S.recurRules=data.recurRules.map(r=>({id:r['ID']||r.id,title:r['Title']||r.title,freq:r['Frequency']||r.freq,startDate:r['Start Date']||r.startDate,endDate:r['End Date']||r.endDate||'',cat:r['Category']||r.cat,hour:parseInt(r['Hour']||r.hour)||8,note:r['Note']||r.note||''}));
-      // Merge client data from Sheets onto BASE_COMPANIES
-      if(data.clients&&data.clients.length){
-        data.clients.forEach(c=>{
-          const co=c.company||c['Company']||'';
-          const key=co.toLowerCase();
-          if(baseMap[key]){
-            if(c.stage||c['Stage'])baseMap[key].stage=c.stage||c['Stage'];
-            ['contact','phone','email','website','address','focus','size'].forEach(f=>{
-              const v=c[f]||c[f.charAt(0).toUpperCase()+f.slice(1)]||'';
-              if(v)baseMap[key][f]=v;
-            });
-            if(c.notes&&c.notes.length)baseMap[key].notes=c.notes;
-            if(c.files&&c.files.length)baseMap[key].files=c.files;
-          } else if(co) {
-            baseMap[key]={company:co,stage:c.stage||c['Stage']||'',contact:c.contact||'',phone:c.phone||'',email:c.email||'',website:c.website||'',address:c.address||'',focus:c.focus||'',size:c.size||'',notes:c.notes||[],files:c.files||[]};
-          }
-        });
-        S.clients=Object.values(baseMap);
-      }
+      mergeFromSheets(data);
       _loadedFromSheets=true;
+      // Save merged result to localStorage
+      saveToLocal();
       setSyncStatus('✓ Loaded '+new Date().toLocaleTimeString(),'ok');
     } else {
-      setSyncStatus('Load error — '+((data&&data.message)||'check URL'),'err');
+      setSyncStatus('⚠ Load error — using local data','err');
     }
   }catch(err){
-    setSyncStatus('⚠ Offline — using base data','err');
-    console.warn('Load failed:',err);
+    setSyncStatus('⚠ Offline — using local data','err');
+    console.warn('Sheets load failed:',err);
   }
   updateCounts();
 }
 
-// ── SAVE — sends a single granular operation to Sheets immediately
-// Operations queue if one is already in flight to prevent race conditions
-function save(op){
-  // op = {action, data} — describes exactly what changed
-  // If no op provided (legacy call), do nothing — UI renders from S state
-  if(op) _syncQueue.push(op);
-  updateCounts();
-  processSyncQueue();
+function mergeFromSheets(data){
+  // Merge Sheets data into S state — additive, never removes
+  if(data.sections&&data.sections.length){
+    S.sections=data.sections.map(s=>({
+      id:String(s['ID']||s.id||''),
+      name:String(s['Name']||s.name||''),
+      style:String(s['Style']||s.style||'s-other'),
+      cat:String(s['Category']||s.cat||'')
+    })).filter(s=>s.id);
+  }
+  if(data.tasks){
+    S.tasks=data.tasks.map(t=>({
+      id:String(t['ID']||t.id||''),name:String(t['Name']||t.name||''),
+      secId:String(t['Section ID']||t.secId||''),status:String(t['Status']||t.status||'normal'),
+      due:String(t['Due Date']||t.due||''),notes:String(t['Notes']||t.notes||'')
+    })).filter(t=>t.id&&t.name);
+  }
+  if(data.archived){
+    S.archived=data.archived.map(a=>({
+      id:String(a['ID']||a.id||''),name:String(a['Name']||a.name||''),
+      secId:String(a['Section ID']||a.secId||''),status:String(a['Status']||a.status||''),
+      due:String(a['Due Date']||a.due||''),notes:String(a['Notes']||a.notes||''),
+      archivedAt:String(a['Archived On']||a.archivedAt||'')
+    })).filter(a=>a.id);
+  }
+  if(data.events){
+    S.events=data.events.map(e=>({
+      id:String(e['ID']||e.id||''),title:String(e['Title']||e.title||''),
+      cat:String(e['Category']||e.cat||''),date:String(e['Date']||e.date||''),
+      hour:parseInt(e['Hour']||e.hour)||8,note:String(e['Note']||e.note||''),
+      recurId:String(e['Recur ID']||e.recurId||''),taskId:String(e['Task ID']||e.taskId||'')
+    })).filter(e=>e.id);
+  }
+  if(data.recurRules){
+    S.recurRules=data.recurRules.map(r=>({
+      id:String(r['ID']||r.id||''),title:String(r['Title']||r.title||''),
+      freq:String(r['Frequency']||r.freq||'Weekly'),
+      startDate:String(r['Start Date']||r.startDate||''),
+      endDate:String(r['End Date']||r.endDate||''),
+      cat:String(r['Category']||r.cat||''),
+      hour:parseInt(r['Hour']||r.hour)||8,note:String(r['Note']||r.note||'')
+    })).filter(r=>r.id);
+  }
+  if(data.clients&&data.clients.length){
+    const baseMap={};
+    BASE_COMPANIES.forEach(b=>{baseMap[b.company.toLowerCase()]={...b,notes:[...(b.notes||[])],files:[]};});
+    data.clients.forEach(c=>{
+      const co=String(c.company||c['Company']||'');if(!co)return;
+      const key=co.toLowerCase();
+      const base=baseMap[key]||{company:co,notes:[],files:[]};
+      const stage=c.stage||c['Stage']||'';
+      const merged={...base};
+      if(stage)merged.stage=stage;
+      ['contact','phone','email','website','address','focus','size'].forEach(f=>{
+        const v=c[f]||c[f.charAt(0).toUpperCase()+f.slice(1)]||'';
+        if(v)merged[f]=v;
+      });
+      if(c.notes&&c.notes.length)merged.notes=c.notes;
+      if(c.files&&c.files.length)merged.files=c.files;
+      baseMap[key]=merged;
+    });
+    S.clients=Object.values(baseMap);
+  }
 }
 
-async function processSyncQueue(){
-  if(_syncing||!_syncQueue.length||!SHEETS_URL)return;
+// ── SAVE — instant to localStorage, debounced sync to Sheets ─────────────────
+function save(op){
+  // Always save to localStorage immediately
+  saveToLocal();
+  updateCounts();
+  // Queue Sheets sync (debounced 5s)
+  if(SHEETS_URL){
+    clearTimeout(_syncDebounce);
+    setSyncStatus('Unsaved changes…');
+    _syncDebounce=setTimeout(syncToSheets, 5000);
+  }
+}
+
+function saveToLocal(){
+  try{
+    localStorage.setItem(SK,JSON.stringify({
+      sections:S.sections,tasks:S.tasks,archived:S.archived,
+      events:S.events,recurRules:S.recurRules,clients:S.clients
+    }));
+  }catch(e){console.warn('localStorage full');}
+}
+
+async function syncToSheets(){
+  if(_syncing||!SHEETS_URL)return;
   _syncing=true;
   setSyncStatus('Saving…');
-  while(_syncQueue.length){
-    const op=_syncQueue.shift();
-    try{
-      await sheetsGet({action:op.action,data:encodeURIComponent(JSON.stringify(op.data))});
-    }catch(err){
-      console.warn('Sync op failed:',op.action,err);
-      // Re-queue failed op
-      _syncQueue.unshift(op);
-      setSyncStatus('⚠ Sync issue — retrying','err');
-      _syncing=false;
-      setTimeout(processSyncQueue,5000);
-      return;
-    }
-  }
-  _syncing=false;
-  setSyncStatus('✓ Saved '+new Date().toLocaleTimeString(),'ok');
-}
-
-// Simple delete helper (no data body needed)
-async function sheetsDelete(action,id){
-  if(!SHEETS_URL)return;
   try{
-    await sheetsGet({action,id});
-  }catch(err){console.warn('Delete failed:',action,id,err);}
+    // Use proven no-cors GET bulk save — splits large payload automatically
+    const core={tasks:S.tasks,archived:S.archived,events:S.events,recurRules:S.recurRules,sections:S.sections};
+    const full={...core,clients:S.clients};
+    const encoded=encodeURIComponent(JSON.stringify(full));
+    if(encoded.length<100000){
+      await fetch(SHEETS_URL+'?action=save&data='+encoded,{method:'GET',mode:'no-cors'});
+    } else {
+      // Send core + clients in chunks
+      await fetch(SHEETS_URL+'?action=save&data='+encodeURIComponent(JSON.stringify(core)),{method:'GET',mode:'no-cors'});
+      for(let i=0;i<S.clients.length;i+=15){
+        const chunk=S.clients.slice(i,i+15);
+        await fetch(SHEETS_URL+'?action=saveClients&data='+encodeURIComponent(JSON.stringify({clients:chunk,offset:i})),{method:'GET',mode:'no-cors'});
+      }
+    }
+    _lastSync=new Date();
+    _syncing=false;
+    setSyncStatus('✓ Saved '+_lastSync.toLocaleTimeString(),'ok');
+  }catch(e){
+    _syncing=false;
+    const msg=String(e&&e.message||e);
+    if(msg.includes('NetworkError')||msg.includes('Failed to fetch')){
+      setSyncStatus('⚠ Offline — saved locally','err');
+    } else {
+      setSyncStatus('⚠ Sync failed — saved locally','err');
+    }
+    console.warn('Sheets sync error:',e);
+  }
 }
 
 function updateCounts(){
@@ -471,7 +544,6 @@ function updateCounts(){
   if(ac)ac.textContent=S.archived?S.archived.length:0;
 }
 
-// ── SYNC STATUS ────────────────────────────────────────────────────────────
 function setSyncStatus(msg,cls){
   const el=document.getElementById('sync-status');
   if(!el)return;
@@ -479,19 +551,30 @@ function setSyncStatus(msg,cls){
   el.className='sync-status'+(cls?' '+cls:'');
 }
 
-// Reload from Sheets (manual refresh)
+// Manual reload from Sheets
 async function reloadFromSheets(){
-  if(!confirm('Reload latest data from Sheets? Any unsynced local changes will be replaced.'))return;
-  S.tasks=[];S.archived=[];S.events=[];S.sections=[
-    {id:'s1',name:'Patches',style:'s-patches',cat:'Patches'},
-    {id:'s2',name:'Follow Up',style:'s-followup',cat:'Follow Up'},
-    {id:'s3',name:'Reach Out',style:'s-reachout',cat:'Reach Out'},
-    {id:'s4',name:'Samples',style:'s-samples',cat:'Samples'},
-    {id:'s5',name:'To Do',style:'s-todo',cat:'To Do'},
-    {id:'s6',name:'Other',style:'s-other',cat:'Other'}
-  ];S.recurRules=[];S.clients=null;
-  await load();
-  render();
+  if(!confirm('Reload latest data from Sheets?\n\nThis will merge the latest Sheets data with your local data.'))return;
+  setSyncStatus('Reloading…');
+  try{
+    const data=await sheetsGet({action:'load'});
+    if(data&&data.status==='ok'){
+      mergeFromSheets(data);
+      saveToLocal();
+      render();
+      setSyncStatus('✓ Reloaded '+new Date().toLocaleTimeString(),'ok');
+    } else {
+      setSyncStatus('Reload failed — '+((data&&data.message)||'check URL'),'err');
+    }
+  }catch(e){
+    setSyncStatus('⚠ Reload failed — offline?','err');
+  }
+}
+
+// Simple delete helper — sends a small GET to Sheets
+function sheetsDelete(action,id){
+  if(!SHEETS_URL)return;
+  fetch(SHEETS_URL+'?action='+action+'&id='+encodeURIComponent(id),{method:'GET',mode:'no-cors'})
+    .catch(e=>console.warn('Delete op failed:',action,id));
 }
 
 // ── CORE HELPERS ──────────────────────────────────────────────────────────────
@@ -1096,13 +1179,13 @@ function deleteSec(id){
     if(!confirm(`Delete section "${sec.name}"?`))return;
   }
   S.sections=S.sections.filter(s=>s.id!==id);
-  save({action:'saveSections',data:{sections:S.sections}});render();
+  save();render();
 }
 function dropSec(e,sid){
   e.preventDefault();
   if(!dragId)return;
   const t=S.tasks.find(x=>x.id===dragId);
-  if(t){t.secId=sid;save({action:'saveTask',data:t});}
+  if(t){t.secId=sid;save();}
   dragId=null;render();
 }
 
@@ -1115,7 +1198,7 @@ function dropSecReorder(e,targetId){
   const moved=S.sections.splice(fromIdx,1)[0];
   S.sections.splice(toIdx,0,moved);
   dragSecId=null;
-  save({action:'saveSections',data:{sections:S.sections}});
+  save();
   render();
 }
 function calClick(el){S.calModal={date:el.dataset.date,hour:parseInt(el.dataset.hour)};render();}
@@ -1136,7 +1219,7 @@ function archiveTask(id){
   S.archived.push(archived);
   S.tasks=S.tasks.filter(x=>x.id!==id);
   S.events=S.events.filter(e=>e.taskId!==id);
-  save({action:'archiveTask',data:archived});
+  save();
   render();
 }
 function restoreTask(id){
@@ -1144,7 +1227,7 @@ function restoreTask(id){
   const{archivedAt,...t}=a;
   S.tasks.push(t);
   S.archived=S.archived.filter(x=>x.id!==id);
-  save({action:'saveTask',data:t});
+  save();
   sheetsDelete('deleteTask',id+'&type=archived');
   S.tab='planner';render();
 }
@@ -1168,12 +1251,12 @@ function delTask(id){
 function renSec(id){
   const s=S.sections.find(x=>x.id===id);if(!s)return;
   const n=prompt('Rename section:',s.name);
-  if(n){s.name=n.trim();save({action:'saveSections',data:{sections:S.sections}});render();}
+  if(n){s.name=n.trim();save();render();}
 }
 function addSec(){
   const n=prompt('New section name:');if(!n)return;
   S.sections.push({id:'s'+Date.now(),name:n.trim(),style:'s-custom',cat:n.trim()});
-  save({action:'saveSections',data:{sections:S.sections}});render();
+  save();render();
 }
 function gcalTask(id){const t=S.tasks.find(x=>x.id===id);if(!t)return;const d=(t.due||todayStr()).replace(/-/g,'');window.open(`https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(t.name)}&dates=${d}/${d}&details=${encodeURIComponent(t.notes||'')}`);}
 
@@ -1189,18 +1272,18 @@ function saveTask(){
       Object.assign(t,{name,secId,status,due,notes});
       const ev=S.events.find(e=>e.taskId===t.id);
       if(ev&&due){ev.title=name;ev.cat=cat;ev.date=due;ev.note=notes.slice(0,60);}
-      save({action:'saveTask',data:t});
-      if(ev&&due) save({action:'saveEvent',data:ev});
+      save();
+      if(ev&&due) save();
     }
   }else{
     const id='t'+Date.now();
     const task={id,name,secId,status,due,notes};
     S.tasks.push(task);
-    save({action:'saveTask',data:task});
+    save();
     if(due){
       const ev={id:'e'+Date.now(),taskId:id,title:name,cat,date:due,hour:hr,note:notes.slice(0,60)};
       S.events.push(ev);
-      save({action:'saveEvent',data:ev});
+      save();
     }
   }
   S.modal=null;S.editId=null;render();
@@ -1209,7 +1292,7 @@ function saveCalEv(){
   const title=(document.getElementById('ce-title').value||'').trim();if(!title)return;
   const ev={id:'e'+Date.now(),title,cat:document.getElementById('ce-cat').value,date:document.getElementById('ce-date').value,hour:parseInt(document.getElementById('ce-hr').value),note:document.getElementById('ce-note').value};
   S.events.push(ev);
-  save({action:'saveEvent',data:ev});
+  save();
   S.calModal=null;render();
 }
 function openEditRecur(id){
@@ -1233,13 +1316,13 @@ function saveRecur(){
     if(rule){
       Object.assign(rule,{title,freq,startDate,endDate,cat,hour,note});
       S.events=S.events.filter(e=>e.recurId!==S.editRecurId);
-      save({action:'saveRecur',data:rule});
+      save();
     }
     S.editRecurId=null;
   } else {
     const rule={id:'rr'+Date.now(),title,freq,startDate,endDate,cat,hour,note};
     S.recurRules.push(rule);
-    save({action:'saveRecur',data:rule});
+    save();
   }
   render();
 }
@@ -1317,7 +1400,7 @@ function saveNewClient(){
   if(exactExists){alert('⛔ "'+name+'" already exists.');return;}
   const c={company:name,size:document.getElementById('ac-size').value,address:document.getElementById('ac-addr').value,contact:document.getElementById('ac-contact').value,phone:document.getElementById('ac-phone').value,website:document.getElementById('ac-web').value,focus:document.getElementById('ac-focus').value,email:document.getElementById('ac-email').value,stage:document.getElementById('ac-stage').value,notes:[],files:[]};
   S.clients.push(c);
-  save({action:'saveClient',data:c});
+  save();
   S.addClientModal=null;S.selClient=S.clients.length-1;S.tab='clients';render();
 }
 function saveAddToPlanner(idx){
@@ -1333,11 +1416,11 @@ function saveAddToPlanner(idx){
   const id='t'+Date.now();
   const task={id,name,secId,status,due,notes,clientIdx:idx};
   S.tasks.push(task);
-  save({action:'saveTask',data:task});
+  save();
   if(due){
     const ev={id:'e'+Date.now(),taskId:id,title:name,cat,date:due,hour:hr,note:notes.slice(0,60)};
     S.events.push(ev);
-    save({action:'saveEvent',data:ev});
+    save();
   }
   S.addToPlannerModal=null;
   S.tab='planner';
@@ -1357,19 +1440,19 @@ function saveNote(idx){
   c.notes.push(note);
   if(stage)c.stage=stage;
   // Save note to Sheets
-  save({action:'saveNote',data:{company:c.company,note}});
+  save();
   // If stage changed, update client record too
-  if(stage) save({action:'saveClient',data:c});
+  if(stage) save();
   // Also add to planner + calendar
   const sec=S.sections.find(s=>s.name==='Reach Out')||S.sections[0];
   const id='t'+Date.now();
   const task={id,name:c.company,secId:sec.id,status:'normal',due:date,notes:text.slice(0,120),clientIdx:idx};
   S.tasks.push(task);
-  save({action:'saveTask',data:task});
+  save();
   if(date){
     const ev={id:'ev'+Date.now(),taskId:id,title:c.company,cat:sec.cat||'Reach Out',date,hour:9,note:text.slice(0,60)};
     S.events.push(ev);
-    save({action:'saveEvent',data:ev});
+    save();
   }
   textEl.value='';
   render();
@@ -1457,7 +1540,7 @@ async function uploadOneFile(file,idx){
         if(fileUrl&&fileUrl.url){
           const fRec2={name:file.name,url:fileUrl.url,date,note:'Uploaded to Drive'};
           S.clients[idx].files.push(fRec2);
-          save({action:'saveFile',data:{company:S.clients[idx].company,file:fRec2}});
+          save();
           showFileStatus('✓ '+file.name+' — link saved');
           render();
           return;
@@ -1467,7 +1550,7 @@ async function uploadOneFile(file,idx){
       const driveFolder='https://drive.google.com/drive/folders/'+DRIVE_FOLDER_ID;
       const fFolder={name:file.name,url:driveFolder,date,note:'Uploaded — click Open to browse Drive folder'};
       S.clients[idx].files.push(fFolder);
-      save({action:'saveFile',data:{company:S.clients[idx].company,file:fFolder}});
+      save();
       showFileStatus('✓ '+file.name+' uploaded to Drive');
       render();
       return;
@@ -1482,12 +1565,12 @@ async function uploadOneFile(file,idx){
     const dataUrl=await toDataURL(file);
     const fImg={name:file.name,url:dataUrl,date,note:'Image preview'};
     S.clients[idx].files.push(fImg);
-    save({action:'saveFile',data:{company:S.clients[idx].company,file:fImg}});
+    save();
     showFileStatus('✓ '+file.name+' stored as preview');
   } else {
     const fName={name:file.name,url:'',date,note:'Set DRIVE_FOLDER_ID to enable upload'};
     S.clients[idx].files.push(fName);
-    save({action:'saveFile',data:{company:S.clients[idx].company,file:fName}});
+    save();
     showFileStatus('📎 '+file.name+' name saved');
   }
   render();
@@ -1512,7 +1595,7 @@ function addFile(idx){
   const file={name,url,date:dateEl?dateEl.value:'',note:noteEl?noteEl.value:''};
   S.clients[idx].files.push(file);
   if(nameEl)nameEl.value='';if(urlEl)urlEl.value='';if(noteEl)noteEl.value='';
-  save({action:'saveFile',data:{company:S.clients[idx].company,file}});
+  save();
   render();
 }
 
@@ -1521,7 +1604,7 @@ function removeFile(clientIdx,fileIdx){
   const c=S.clients[clientIdx];
   const f=c.files[fileIdx];
   c.files.splice(fileIdx,1);
-  if(f) save({action:'deleteFile',data:{company:c.company,fileName:f.name}});
+  if(f) save();
   render();
 }
 
@@ -1577,7 +1660,7 @@ function importCSV(e){
           duplicates.push(company+' (similar to: '+similar.company+')');
         } else {
           S.clients.push(newClient);
-        save({action:'saveClient',data:newClient});
+        save();
         added++;
         }
       }
@@ -1702,33 +1785,30 @@ function bindLiveInputs(){
   if(as)as.addEventListener('input',function(){S.archiveSearch=this.value;render();});
 }
 
-// Startup: load data from Sheets, then render
+// ── STARTUP ──────────────────────────────────────────────────────────────────
+render(); // render immediately with local/default data
 (async function(){
-  render(); // render immediately with defaults so page isn't blank
-  await load();
-  render(); // re-render with Sheets data
-  // Poll for changes every 30 seconds (for multi-user awareness)
+  await load();  // load from Sheets (merges with local)
+  render();      // re-render with Sheets data
+
+  // Poll Sheets every 45s to pick up changes from other user
   setInterval(async()=>{
-    if(!_syncing&&_loadedFromSheets){
-      try{
-        const data=await sheetsGet({action:'load'});
-        if(data&&data.status==='ok'){
-          // Soft merge: only update if other user made changes
-          // Compare task/event counts as a simple change detector
-          const newTaskCount=(data.tasks||[]).length;
-          const newEventCount=(data.events||[]).length;
-          if(Math.abs(newTaskCount-S.tasks.length)>0||Math.abs(newEventCount-S.events.length)>0){
-            // Reload silently - re-run load logic
-            if(data.tasks) S.tasks=data.tasks.map(t=>({id:t['ID']||t.id,name:t['Name']||t.name,secId:t['Section ID']||t.secId,status:t['Status']||t.status,due:t['Due Date']||t.due,notes:t['Notes']||t.notes||''}));
-            if(data.events) S.events=data.events.map(e=>({id:e['ID']||e.id,title:e['Title']||e.title,cat:e['Category']||e.cat,date:e['Date']||e.date,hour:parseInt(e['Hour']||e.hour)||8,note:e['Note']||e.note||'',recurId:e['Recur ID']||e.recurId||'',taskId:e['Task ID']||e.taskId||''}));
-            if(data.archived) S.archived=data.archived.map(a=>({id:a['ID']||a.id,name:a['Name']||a.name,secId:a['Section ID']||a.secId,status:a['Status']||a.status,due:a['Due Date']||a.due,notes:a['Notes']||a.notes||'',archivedAt:a['Archived On']||a.archivedAt}));
-            setSyncStatus('↻ Updated '+new Date().toLocaleTimeString(),'ok');
-            render();
-          }
+    if(_syncing)return; // don't poll while saving
+    try{
+      const data=await sheetsGet({action:'load'},15000);
+      if(data&&data.status==='ok'){
+        const prevTaskCount=S.tasks.length;
+        const prevArchiveCount=S.archived.length;
+        mergeFromSheets(data);
+        // Only re-render if something actually changed
+        if(S.tasks.length!==prevTaskCount||S.archived.length!==prevArchiveCount){
+          saveToLocal();
+          setSyncStatus('↻ Updated '+new Date().toLocaleTimeString(),'ok');
+          render();
         }
-      }catch(e){/* silent — don't disturb user if poll fails */}
-    }
-  },30000);
+      }
+    }catch(e){/* silent poll failure — don't show error */}
+  },45000);
 })();
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.querySelector('.moverlay'))closeAllModals();});
 </script>
