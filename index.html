@@ -345,8 +345,9 @@ let _syncDebounce=null;
 let _lastSync=null;
 let _loadedFromSheets=false;
 let _syncing=false;
-let _lastSheetsTimestamp=null;   // timestamp of last confirmed Sheets state
-let _pendingSave=false;          // true if we have unsaved local changes
+let _lastSheetsTimestamp=null;
+let _pendingSave=false;
+let _pendingSaveTimer=null;      // clears _pendingSave 25s after save completes
 
 // ── JSONP helper — reads responses from Apps Script ───────────────────────────
 function sheetsGet(params, timeoutMs=25000){
@@ -667,7 +668,6 @@ async function syncToSheets(){
     const nonRecurEvents=S.events.filter(e=>!e.recurId);
     const core={tasks:S.tasks,archived:S.archived,events:nonRecurEvents,
                 recurRules:S.recurRules,sections:S.sections};
-    // Always use no-cors for reliability — confirmed by next poll
     const full={...core,clients:S.clients};
     const fullEncoded=encodeURIComponent(JSON.stringify(full));
     if(fullEncoded.length<100000){
@@ -682,8 +682,11 @@ async function syncToSheets(){
     }
     _lastSync=new Date();
     _syncing=false;
-    _pendingSave=false;
     setSyncStatus('✓ Saved '+_lastSync.toLocaleTimeString(),'ok');
+    // Keep _pendingSave=true for 25s after save to ensure Sheets has processed it
+    // before any poll fires (poll interval is 20s)
+    clearTimeout(_pendingSaveTimer);
+    _pendingSaveTimer=setTimeout(()=>{ _pendingSave=false; },25000);
   }catch(e){
     _syncing=false;
     _pendingSave=false;
@@ -2616,16 +2619,27 @@ try{ render(); } catch(e){ console.error('Render failed:',e); }
       const data=await sheetsGet({action:'load'},15000);
       if(!data||data.status!=='ok')return;
 
-      // Snapshot current IDs for comparison
+      // Safety check: never accept Sheets data that has FEWER tasks than local
+      // This prevents a stale Sheets read from wiping local changes
+      const sheetsTasks=(data.tasks||[]).length;
+      const localTasks=S.tasks.length;
+      if(sheetsTasks<localTasks){
+        // Sheets has less data — our save probably hasn't landed yet
+        // Push our data to Sheets again and skip this poll cycle
+        if(!_syncing){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,2000); }
+        return;
+      }
+
+      // Snapshot current state for comparison
       const prevTasks=S.tasks.map(t=>t.id+t.status+t.name).sort().join(',');
       const prevRecur=S.recurRules.map(r=>r.id+r.title).sort().join(',');
       const prevSections=S.sections.map(s=>s.id+s.name).sort().join(',');
       const prevArchived=S.archived.map(a=>a.id).sort().join(',');
 
-      // Hard reset from Sheets
+      // Apply Sheets data
       hardResetFromSheets(data);
 
-      // Compare after reset
+      // Re-render only if something actually changed
       const newTasks=S.tasks.map(t=>t.id+t.status+t.name).sort().join(',');
       const newRecur=S.recurRules.map(r=>r.id+r.title).sort().join(',');
       const newSections=S.sections.map(s=>s.id+s.name).sort().join(',');
@@ -2635,7 +2649,7 @@ try{ render(); } catch(e){ console.error('Render failed:',e); }
                     prevSections!==newSections||prevArchived!==newArchived;
       if(changed){
         saveToLocal();
-        setSyncStatus('↻ Synced from another device '+new Date().toLocaleTimeString(),'ok');
+        setSyncStatus('↻ Synced '+new Date().toLocaleTimeString(),'ok');
         render();
       }
     }catch(e){/* silent poll failure */}
@@ -2647,10 +2661,13 @@ try{ render(); } catch(e){ console.error('Render failed:',e); }
       try{
         const data=await sheetsGet({action:'load'},15000);
         if(data&&data.status==='ok'){
+          // Safety: don't overwrite local if Sheets has fewer tasks
+        if((data.tasks||[]).length>=S.tasks.length){
           hardResetFromSheets(data);
           saveToLocal();
           render();
           setSyncStatus('\u2713 Synced '+new Date().toLocaleTimeString(),'ok');
+        }
         }
       }catch(e){}
     }
