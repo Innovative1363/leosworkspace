@@ -197,6 +197,35 @@ html,body{height:100%;overflow:hidden;background:#f1f5f9}
 </div>
 
 <script>
+// Separate debug script — runs even if main script has syntax errors
+(function(){
+  var dbg=document.createElement('div');
+  dbg.id='_dbg';
+  dbg.style.cssText='position:fixed;bottom:0;left:0;right:0;max-height:200px;overflow-y:auto;background:#111;color:#0f0;font-family:monospace;font-size:12px;padding:8px;z-index:99999;border-top:3px solid #0f0';
+  document.body.appendChild(dbg);
+  function log(msg,c){var d=document.createElement('div');d.style.color=c||'#0f0';d.textContent=msg;dbg.appendChild(d);dbg.scrollTop=9999;}
+  log('Debug script running...');
+  // Check if main script ran at all
+  setTimeout(function(){
+    log('render defined: '+(typeof render==='function'));
+    log('S defined: '+(typeof S==='object'));
+    log('setTab defined: '+(typeof setTab==='function'));
+    log('tab-content innerHTML length: '+((document.getElementById('tab-content')||{}).innerHTML||'').length);
+    if(typeof render==='function'){
+      try{render();log('render() called successfully','#0f0');}
+      catch(e){log('render() error: '+e.message,'#f00');}
+    } else {
+      log('Main script FAILED TO PARSE — check for syntax errors','#f00');
+    }
+  },500);
+  // Catch global errors
+  window.onerror=function(msg,src,line,col,err){
+    log('JS ERROR: '+msg+' (line '+line+')','#f00');
+    return false;
+  };
+})();
+</script>
+<script>
 // ════════════════════════════════════════════════════════════════════════
 //  ▼▼▼  GOOGLE APPS SCRIPT URL  ▼▼▼
 // ════════════════════════════════════════════════════════════════════════
@@ -2684,3 +2713,6 @@ try{
 })(); // end startup IIFE
 
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.querySelector('.moverlay'))closeAllModals();});
+</script>
+</body>
+</html>
