@@ -662,35 +662,53 @@ async function syncToSheets(){
   _syncing=true;
   setSyncStatus('Saving…');
   try{
-    // Use proven no-cors GET bulk save — splits large payload automatically
-    const core={tasks:S.tasks,archived:S.archived,events:S.events,recurRules:S.recurRules,sections:S.sections};
-    const full={...core,clients:S.clients};
-    const encoded=encodeURIComponent(JSON.stringify(full));
-    if(encoded.length<100000){
-      await fetch(SHEETS_URL+'?action=save&data='+encoded,{method:'GET',mode:'no-cors'});
+    const core={tasks:S.tasks,archived:S.archived,events:S.events,
+                recurRules:S.recurRules,sections:S.sections};
+    const coreEncoded=encodeURIComponent(JSON.stringify(core));
+
+    // Use JSONP for core data save — gives us real confirmation + timestamp from Sheets
+    // JSONP GET has ~8000 char URL limit; core data is usually well under that
+    let saveResult=null;
+    if(coreEncoded.length<6000){
+      // Small enough for JSONP — use it for confirmed save
+      try{
+        saveResult=await sheetsGet({action:'save',data:JSON.stringify(core)},20000);
+      }catch(e){ saveResult=null; }
+    }
+
+    if(!saveResult||saveResult.status!=='ok'){
+      // Fall back to no-cors for large payloads
+      await fetch(SHEETS_URL+'?action=save&data='+coreEncoded,{method:'GET',mode:'no-cors'});
+    }
+
+    // Save clients separately (always no-cors — they're large)
+    const clientsEncoded=encodeURIComponent(JSON.stringify({clients:S.clients}));
+    if(clientsEncoded.length<100000){
+      await fetch(SHEETS_URL+'?action=save&data='+encodeURIComponent(JSON.stringify({...core,clients:S.clients})),
+        {method:'GET',mode:'no-cors'});
     } else {
-      // Send core + clients in chunks
-      await fetch(SHEETS_URL+'?action=save&data='+encodeURIComponent(JSON.stringify(core)),{method:'GET',mode:'no-cors'});
+      await fetch(SHEETS_URL+'?action=save&data='+coreEncoded,{method:'GET',mode:'no-cors'});
       for(let i=0;i<S.clients.length;i+=15){
         const chunk=S.clients.slice(i,i+15);
-        await fetch(SHEETS_URL+'?action=saveClients&data='+encodeURIComponent(JSON.stringify({clients:chunk,offset:i})),{method:'GET',mode:'no-cors'});
+        await fetch(SHEETS_URL+'?action=saveClients&data='+
+          encodeURIComponent(JSON.stringify({clients:chunk,offset:i})),
+          {method:'GET',mode:'no-cors'});
       }
     }
+
     _lastSync=new Date();
     _pendingSave=false;
     _syncing=false;
+    // Use confirmed Sheets timestamp if we got one, else use local time
+    _lastSheetsTimestamp=(saveResult&&saveResult.timestamp)||_lastSync.toISOString();
     setSyncStatus('✓ Saved '+_lastSync.toLocaleTimeString(),'ok');
-    // Record save time as our Sheets timestamp so poll knows we're up to date
-    _lastSheetsTimestamp=_lastSync.toISOString();
   }catch(e){
     _syncing=false;
-    const msg=String(e&&e.message||e);
-    if(msg.includes('NetworkError')||msg.includes('Failed to fetch')){
-      setSyncStatus('⚠ Offline — saved locally','err');
-    } else {
-      setSyncStatus('⚠ Sync failed — saved locally','err');
-    }
+    _pendingSave=false; // Clear pending so poll can pull fresh data
+    setSyncStatus('⚠ Sync failed — will retry','err');
     console.warn('Sheets sync error:',e);
+    // Retry once after 10s
+    setTimeout(()=>{if(!_pendingSave)syncToSheets();},10000);
   }
 }
 
@@ -743,13 +761,14 @@ function hardResetFromSheets(data){
       style:String(s['Style']||s.style||'s-other'),
       cat:String(s['Category']||s.cat||'')
     })).filter(s=>s.id);
-    if(fromSheets.length>=S.sections.length){
-      S.sections=fromSheets;
+    // Always keep custom sections (non s1-s6) that exist locally but not in Sheets
+    const builtIn=new Set(['s1','s2','s3','s4','s5','s6']);
+    const sheetsIds=new Set(fromSheets.map(s=>s.id));
+    const localCustom=S.sections.filter(s=>!builtIn.has(s.id)&&!sheetsIds.has(s.id));
+    if(localCustom.length>0){
+      S.sections=[...fromSheets,...localCustom];
     } else {
-      // Sheets has fewer — merge to not lose local custom sections
-      const sheetsIds=new Set(fromSheets.map(s=>s.id));
-      const localOnly=S.sections.filter(s=>!sheetsIds.has(s.id));
-      S.sections=[...fromSheets,...localOnly];
+      S.sections=fromSheets;
     }
   }
   if(data.tasks){
@@ -776,7 +795,7 @@ function hardResetFromSheets(data){
     })).filter(e=>e.id);
   }
   if(data.recurRules){
-    S.recurRules=data.recurRules.map(r=>({
+    const fromSheetsRR=data.recurRules.map(r=>({
       id:String(r['ID']||r.id||''),title:String(r['Title']||r.title||''),
       freq:String(r['Frequency']||r.freq||'Weekly'),
       startDate:String(r['Start Date']||r.startDate||''),
@@ -784,6 +803,14 @@ function hardResetFromSheets(data){
       cat:String(r['Category']||r.cat||''),
       hour:parseInt(r['Hour']||r.hour)||8,note:String(r['Note']||r.note||'')
     })).filter(r=>r.id);
+    // Only replace if Sheets has rules; if empty keep local (rules may not have synced yet)
+    if(fromSheetsRR.length>0){
+      S.recurRules=fromSheetsRR;
+    } else if(S.recurRules.length>0){
+      // Keep local rules — Sheets RecurRules tab may be empty/stale
+      // Schedule a save to push local rules to Sheets
+      if(!_pendingSave){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,3000); }
+    }
   }
   if(data.clients&&data.clients.length){
     const baseMap={};
@@ -942,7 +969,12 @@ function renderPlanner(){
     // Recurring instances for this section in the displayed week
     const recurForSec=recurThisWeek.filter(ev=>{
       const rule=S.recurRules.find(r=>r.id===ev.recurId);
-      return rule&&(rule.cat===sec.cat||rule.cat===sec.name);
+      if(!rule)return false;
+      const rcat=(rule.cat||'').toLowerCase().trim();
+      const scat=(sec.cat||'').toLowerCase().trim();
+      const sname=(sec.name||'').toLowerCase().trim();
+      // Match on cat or name (case-insensitive), also match if rule cat is empty and sec is Other
+      return rcat===scat||rcat===sname||(rcat===''&&sname==='other');
     });
     const hasContent=secTasks.length||recurForSec.length;
     sb+=`<div class="sec-block ${sec.style||'s-other'}"
