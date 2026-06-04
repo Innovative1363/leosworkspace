@@ -197,6 +197,10 @@ html,body{height:100%;overflow:hidden;background:#f1f5f9}
 </div>
 
 <script>
+// Early stubs — prevent "not defined" errors if clicked before script loads
+function setTab(t){if(typeof S!=='undefined'){S.tab=t;if(typeof render==='function')render();}}
+function filterC(f){if(typeof S!=='undefined'){S.clientFilter=f;if(typeof render==='function')render();}}
+function selC(i){if(typeof S!=='undefined'){S.selClient=i;if(typeof render==='function')render();}}
 // ════════════════════════════════════════════════════════════════════════
 //  ▼▼▼  GOOGLE APPS SCRIPT URL  ▼▼▼
 // ════════════════════════════════════════════════════════════════════════
@@ -487,7 +491,6 @@ async function load(){
     if(data&&data.status==='ok'){
       hardResetFromSheets(data);
       _loadedFromSheets=true;
-      _lastSheetsTimestamp=data.timestamp||null;
       _pendingSave=false;
       saveToLocal();
       setSyncStatus('✓ Loaded '+new Date().toLocaleTimeString(),'ok');
@@ -629,7 +632,9 @@ function save(op){
   if(SHEETS_URL){
     clearTimeout(_syncDebounce);
     setSyncStatus('Unsaved changes…');
-    _syncDebounce=setTimeout(syncToSheets, 3000); // reduced to 3s for faster multi-device sync
+    // 4s debounce: waits for user to stop typing, then saves
+    // _pendingSave blocks poll for 4s + ~2s save time = 6s total protection window
+    _syncDebounce=setTimeout(syncToSheets, 4000);
   }
 }
 
@@ -664,51 +669,28 @@ async function syncToSheets(){
   try{
     const core={tasks:S.tasks,archived:S.archived,events:S.events,
                 recurRules:S.recurRules,sections:S.sections};
-    const coreEncoded=encodeURIComponent(JSON.stringify(core));
-
-    // Use JSONP for core data save — gives us real confirmation + timestamp from Sheets
-    // JSONP GET has ~8000 char URL limit; core data is usually well under that
-    let saveResult=null;
-    if(coreEncoded.length<6000){
-      // Small enough for JSONP — use it for confirmed save
-      try{
-        saveResult=await sheetsGet({action:'save',data:JSON.stringify(core)},20000);
-      }catch(e){ saveResult=null; }
-    }
-
-    if(!saveResult||saveResult.status!=='ok'){
-      // Fall back to no-cors for large payloads
-      await fetch(SHEETS_URL+'?action=save&data='+coreEncoded,{method:'GET',mode:'no-cors'});
-    }
-
-    // Save clients separately (always no-cors — they're large)
-    const clientsEncoded=encodeURIComponent(JSON.stringify({clients:S.clients}));
-    if(clientsEncoded.length<100000){
-      await fetch(SHEETS_URL+'?action=save&data='+encodeURIComponent(JSON.stringify({...core,clients:S.clients})),
-        {method:'GET',mode:'no-cors'});
+    // Always use no-cors for reliability — confirmed by next poll
+    const full={...core,clients:S.clients};
+    const fullEncoded=encodeURIComponent(JSON.stringify(full));
+    if(fullEncoded.length<100000){
+      await fetch(SHEETS_URL+'?action=save&data='+fullEncoded,{method:'GET',mode:'no-cors'});
     } else {
-      await fetch(SHEETS_URL+'?action=save&data='+coreEncoded,{method:'GET',mode:'no-cors'});
+      await fetch(SHEETS_URL+'?action=save&data='+encodeURIComponent(JSON.stringify(core)),{method:'GET',mode:'no-cors'});
       for(let i=0;i<S.clients.length;i+=15){
-        const chunk=S.clients.slice(i,i+15);
         await fetch(SHEETS_URL+'?action=saveClients&data='+
-          encodeURIComponent(JSON.stringify({clients:chunk,offset:i})),
+          encodeURIComponent(JSON.stringify({clients:S.clients.slice(i,i+15),offset:i})),
           {method:'GET',mode:'no-cors'});
       }
     }
-
     _lastSync=new Date();
-    _pendingSave=false;
     _syncing=false;
-    // Use confirmed Sheets timestamp if we got one, else use local time
-    _lastSheetsTimestamp=(saveResult&&saveResult.timestamp)||_lastSync.toISOString();
+    _pendingSave=false;
     setSyncStatus('✓ Saved '+_lastSync.toLocaleTimeString(),'ok');
   }catch(e){
     _syncing=false;
-    _pendingSave=false; // Clear pending so poll can pull fresh data
-    setSyncStatus('⚠ Sync failed — will retry','err');
+    _pendingSave=false;
+    setSyncStatus('⚠ Sync failed — saved locally','err');
     console.warn('Sheets sync error:',e);
-    // Retry once after 10s
-    setTimeout(()=>{if(!_pendingSave)syncToSheets();},10000);
   }
 }
 
@@ -2528,64 +2510,53 @@ try{ render(); } catch(e){ console.error('Initial render failed:',e); }
   try{ await load(); } catch(e){ console.error('Load failed:',e); setSyncStatus('Load error — refresh page','err'); }
   try{ render(); } catch(e){ console.error('Post-load render failed:',e); }      // re-render with Sheets data
 
-  // Poll Sheets every 20s for multi-device sync
+  // Poll Sheets every 20s — always load, only re-render if data changed
   setInterval(async()=>{
-    if(_syncing)return;       // skip if currently saving
-    if(_pendingSave)return;   // skip if we have unsaved changes — our data is newer
+    if(_syncing||_pendingSave)return; // skip if saving or user just made changes
     try{
       const data=await sheetsGet({action:'load'},15000);
       if(!data||data.status!=='ok')return;
 
-      const sheetsTs=data.timestamp||null;
+      // Snapshot current IDs for comparison
+      const prevTasks=S.tasks.map(t=>t.id+t.status+t.name).sort().join(',');
+      const prevRecur=S.recurRules.map(r=>r.id+r.title).sort().join(',');
+      const prevSections=S.sections.map(s=>s.id+s.name).sort().join(',');
+      const prevArchived=S.archived.map(a=>a.id).sort().join(',');
 
-      // Skip if Sheets timestamp hasn't changed since our last sync
-      if(sheetsTs&&_lastSheetsTimestamp&&sheetsTs<=_lastSheetsTimestamp)return;
-
-      // Snapshot current state to detect changes
-      const prevTaskIds=JSON.stringify(S.tasks.map(t=>t.id).sort());
-      const prevRecurIds=JSON.stringify(S.recurRules.map(r=>r.id).sort());
-      const prevArchLen=S.archived.length;
-
-      // Hard reset from Sheets — Sheets is the source of truth
+      // Hard reset from Sheets
       hardResetFromSheets(data);
 
-      // Re-render only if something actually changed
-      const newTaskIds=JSON.stringify(S.tasks.map(t=>t.id).sort());
-      const newRecurIds=JSON.stringify(S.recurRules.map(r=>r.id).sort());
-      const changed=prevTaskIds!==newTaskIds||prevRecurIds!==newRecurIds||
-                    prevArchLen!==S.archived.length;
+      // Compare after reset
+      const newTasks=S.tasks.map(t=>t.id+t.status+t.name).sort().join(',');
+      const newRecur=S.recurRules.map(r=>r.id+r.title).sort().join(',');
+      const newSections=S.sections.map(s=>s.id+s.name).sort().join(',');
+      const newArchived=S.archived.map(a=>a.id).sort().join(',');
 
+      const changed=prevTasks!==newTasks||prevRecur!==newRecur||
+                    prevSections!==newSections||prevArchived!==newArchived;
       if(changed){
-        _lastSheetsTimestamp=sheetsTs;
         saveToLocal();
         setSyncStatus('↻ Synced from another device '+new Date().toLocaleTimeString(),'ok');
         render();
-      } else {
-        _lastSheetsTimestamp=sheetsTs;
       }
     }catch(e){/* silent poll failure */}
   },20000);
-})();
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.querySelector('.moverlay'))closeAllModals();});
 
-// Sync immediately when tab becomes visible (switching between devices/tabs)
-document.addEventListener('visibilitychange',async()=>{
-  if(document.visibilityState==='visible'&&SHEETS_URL&&!_pendingSave&&!_syncing){
-    try{
-      const data=await sheetsGet({action:'load'},15000);
-      if(data&&data.status==='ok'){
-        const sheetsTs=data.timestamp||null;
-        if(!sheetsTs||!_lastSheetsTimestamp||sheetsTs>_lastSheetsTimestamp){
+  // Sync immediately when tab becomes visible
+  document.addEventListener('visibilitychange',async()=>{
+    if(document.visibilityState==='visible'&&SHEETS_URL&&!_pendingSave&&!_syncing){
+      try{
+        const data=await sheetsGet({action:'load'},15000);
+        if(data&&data.status==='ok'){
           hardResetFromSheets(data);
-          _lastSheetsTimestamp=sheetsTs;
           saveToLocal();
           render();
-          setSyncStatus('✓ Synced '+new Date().toLocaleTimeString(),'ok');
+          setSyncStatus('\u2713 Synced '+new Date().toLocaleTimeString(),'ok');
         }
-      }
-    }catch(e){}
-  }
-});
-</script>
-</body>
-</html>
+      }catch(e){}
+    }
+  });
+
+})(); // end startup IIFE
+
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.querySelector('.moverlay'))closeAllModals();});
