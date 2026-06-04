@@ -664,10 +664,67 @@ async function syncToSheets(){
   _syncing=true;
   setSyncStatus('Saving…');
   try{
-    // Don't save recurring-generated events - they're regenerated fresh each render
+    // Step 1: Load current Sheets state so we don't overwrite another device's changes
+    let sheetsData=null;
+    try{ sheetsData=await sheetsGet({action:'load'},10000); }catch(e){}
+
+    // Step 2: Merge — union of Sheets + local (local wins on same ID)
+    let tasksToSave=S.tasks;
+    let archivedToSave=S.archived;
+    let sectionsToSave=S.sections;
+    let recurToSave=S.recurRules;
+
+    if(sheetsData&&sheetsData.status==='ok'){
+      // Tasks: keep all from Sheets that we don't have locally, plus all local tasks
+      const localTaskIds=new Set(S.tasks.map(t=>t.id));
+      const sheetsOnlyTasks=(sheetsData.tasks||[])
+        .map(t=>({id:String(t['ID']||t.id||''),name:String(t['Name']||t.name||''),
+          secId:String(t['Section ID']||t.secId||''),status:String(t['Status']||t.status||'normal'),
+          due:String(t['Due Date']||t.due||''),notes:String(t['Notes']||t.notes||'')}))
+        .filter(t=>t.id&&t.name&&!localTaskIds.has(t.id));
+      tasksToSave=[...S.tasks,...sheetsOnlyTasks];
+
+      // Archived: same union approach
+      const localArchIds=new Set(S.archived.map(a=>a.id));
+      const sheetsOnlyArch=(sheetsData.archived||[])
+        .map(a=>({id:String(a['ID']||a.id||''),name:String(a['Name']||a.name||''),
+          secId:String(a['Section ID']||a.secId||''),status:String(a['Status']||a.status||''),
+          due:String(a['Due Date']||a.due||''),notes:String(a['Notes']||a.notes||''),
+          archivedAt:String(a['Archived On']||a.archivedAt||'')}))
+        .filter(a=>a.id&&!localArchIds.has(a.id));
+      archivedToSave=[...S.archived,...sheetsOnlyArch];
+
+      // Sections: use local (user's explicit layout), merge in any from Sheets we don't have
+      const localSecIds=new Set(S.sections.map(s=>s.id));
+      const sheetsOnlySecs=(sheetsData.sections||[])
+        .map(s=>({id:String(s['ID']||s.id||''),name:String(s['Name']||s.name||''),
+          style:String(s['Style']||s.style||'s-other'),cat:String(s['Category']||s.cat||'')}))
+        .filter(s=>s.id&&!localSecIds.has(s.id));
+      sectionsToSave=[...S.sections,...sheetsOnlySecs];
+
+      // RecurRules: union
+      const localRRIds=new Set(S.recurRules.map(r=>r.id));
+      const sheetsOnlyRR=(sheetsData.recurRules||[])
+        .map(r=>({id:String(r['ID']||r.id||''),title:String(r['Title']||r.title||''),
+          freq:String(r['Frequency']||r.freq||'Weekly'),
+          startDate:normDate(r['Start Date']||r.startDate||''),
+          endDate:normDate(r['End Date']||r.endDate||''),
+          cat:String(r['Category']||r.cat||''),
+          hour:parseInt(r['Hour']||r.hour)||8,note:String(r['Note']||r.note||'')}))
+        .filter(r=>r.id&&!localRRIds.has(r.id));
+      recurToSave=[...S.recurRules,...sheetsOnlyRR];
+
+      // Update local state with the merged data so UI is consistent
+      S.tasks=tasksToSave;
+      S.archived=archivedToSave;
+      S.sections=sectionsToSave;
+      S.recurRules=recurToSave;
+    }
+
+    // Step 3: Save merged state to Sheets
     const nonRecurEvents=S.events.filter(e=>!e.recurId);
-    const core={tasks:S.tasks,archived:S.archived,events:nonRecurEvents,
-                recurRules:S.recurRules,sections:S.sections};
+    const core={tasks:tasksToSave,archived:archivedToSave,events:nonRecurEvents,
+                recurRules:recurToSave,sections:sectionsToSave};
     const full={...core,clients:S.clients};
     const fullEncoded=encodeURIComponent(JSON.stringify(full));
     if(fullEncoded.length<100000){
@@ -683,8 +740,6 @@ async function syncToSheets(){
     _lastSync=new Date();
     _syncing=false;
     setSyncStatus('✓ Saved '+_lastSync.toLocaleTimeString(),'ok');
-    // Keep _pendingSave=true for 25s after save to ensure Sheets has processed it
-    // before any poll fires (poll interval is 20s)
     clearTimeout(_pendingSaveTimer);
     _pendingSaveTimer=setTimeout(()=>{ _pendingSave=false; },25000);
   }catch(e){
