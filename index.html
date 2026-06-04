@@ -308,7 +308,7 @@ const BASE_COMPANIES=[
 {company:"Diversified Protection Corporation",size:"",address:"186 Seven Farms Dr Suite F-391, Daniel Island, SC 29492",contact:"Ms. Sonia / Referred by Tonya",phone:"843-410-5642 ext.102",website:"www.dpcsecurity.com",focus:"Commercial / Government Contracts",email:"",stage:"initial ",notes:[{"date":"2026-02-24","type":"","note":"Called"},{"date":"","type":"","note":"Asked for Henry Wolfe and was told by Tonya that Ms. Sonya was the person in charge of ordering uniforms. I called Ms. Sonya and she was gone for the day. Will try tomorrow earlier."},{"date":"","type":"","note":"Called"},{"date":"2026-03-10","type":"","note":"Spoke to Mrs. Sonya. She said they currently use Unipro and they are ok with them. She said that she would have to reach out to Henry Wolfe about making any changes to uniform purchasing. I sent her a email detailing our services."},{"date":"","type":"","note":"call"},{"date":"2026-04-29","type":"","note":"Spoke to Ms. Sonya. She hasn't spoken to Mr. Henry Wolfe but will let him know that we know Stacy and to ask him about us. I will reach back out in a month if I do not hear back freom her or Mr. Wolfe."},{"date":"2026-05-20","type":"","note":"Call Ms. Sonya if I dont hear back"}]},
 {company:"Ameriguard Security Services",size:"",address:"5470 W. Spruce #102, Fresno, Ca. 93722",contact:"Lawrence Garcia /Owner",phone:"559-271-5984",website:"www.ameriguardsecurity.com",focus:"Commercial / Government Contracts",email:"Eddie/Michael/Leo/Christina?",stage:"",notes:[{"date":"","type":"","note":"02/19 2026"},{"date":"","type":"","note":"Called"},{"date":"","type":"","note":"Asked for Lawrence and his secretary says he's mostly out of the office lately. She would give him all of my information."},{"date":"","type":"","note":"Call"},{"date":"2026-02-26","type":"","note":"Reach back out to Lawrence."},{"date":"2026-05-07","type":"","note":"Calle and left a mess with Lawrence's secrectary. She said that she would pass on my message along with our website."},{"date":"2026-05-21","type":"","note":"Reach back out to Lawrence."}]},
 {company:"American Corporate Security",size:"",address:"340 Golden Shore, Suite 100 Long Beach, CA 90802",contact:"",phone:"",website:"https://amcorpsec.com/",focus:"",email:"",stage:"",notes:[]},
-{company:"Main Patrol, Inc - Security Services		13950 Milton Ave 400 a, Westminster, CA 92683		https://mainpatrolca.com/",size:"",address:"",contact:"",phone:"",website:"",focus:"",email:"",stage:"",notes:[]}
+{company:"Main Patrol, Inc",size:"",address:"13950 Milton Ave 400 a, Westminster, CA 92683",contact:"",phone:"",website:"https://mainpatrolca.com/",focus:"",email:"",stage:"",notes:[]}
 ];
 
 // ── STATE ─────────────────────────────────────────────────────────────────────
@@ -2505,11 +2505,128 @@ function bindLiveInputs(){
   });
 }
 
+
+// ── QUOTE MODAL ───────────────────────────────────────────────────────────────
+function buildQuoteModal(){
+  const m=S.quoteModal;const c=S.clients[m.clientIdx];
+  const today=new Date().toISOString().slice(0,10);
+  const num='Q-'+Date.now().toString().slice(-6);
+  return `<div class="mbox" onclick="event.stopPropagation()" style="width:580px">
+    <h3>📄 Quote / Invoice — ${c.company}</h3>
+    <div class="mrow">
+      <div class="mfield"><label>Quote #</label><input id="qt-num" value="${num}"/></div>
+      <div class="mfield"><label>Date</label><input id="qt-date" type="date" value="${today}"/></div>
+    </div>
+    <div class="mrow">
+      <div class="mfield"><label>Attention / Contact</label><input id="qt-attn" value="${c.contact||''}"/></div>
+      <div class="mfield"><label>Send to (email)</label><input id="qt-email" value="${c.email||''}" placeholder="recipient@company.com"/></div>
+    </div>
+    <div id="qt-lines" style="margin-bottom:10px">
+      <div style="display:grid;grid-template-columns:1fr 70px 80px 80px 30px;gap:5px;margin-bottom:4px">
+        <span style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase">Description</span>
+        <span style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase">Qty</span>
+        <span style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase">Unit $</span>
+        <span style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase">Total</span>
+        <span></span>
+      </div>
+      <div class="qt-line" style="display:grid;grid-template-columns:1fr 70px 80px 80px 30px;gap:5px;margin-bottom:4px">
+        <input class="qt-desc" placeholder="Item description" style="font-size:12px;padding:5px 8px;border:1.5px solid #cbd5e1;border-radius:6px"/>
+        <input class="qt-qty" type="number" placeholder="1" min="0" style="font-size:12px;padding:5px 8px;border:1.5px solid #cbd5e1;border-radius:6px"/>
+        <input class="qt-price" type="number" placeholder="0.00" min="0" step="0.01" style="font-size:12px;padding:5px 8px;border:1.5px solid #cbd5e1;border-radius:6px"/>
+        <input class="qt-total" readonly placeholder="0.00" style="font-size:12px;padding:5px 8px;border:1.5px solid #e2e8f0;border-radius:6px;background:#f8fafc"/>
+        <button onclick="this.closest('.qt-line').remove();calcQtTotal()" style="font-size:14px;background:none;border:none;cursor:pointer;color:#ccc">✕</button>
+      </div>
+    </div>
+    <button onclick="addQtLine()" class="btn" style="font-size:11px;margin-bottom:10px">+ Add line</button>
+    <div class="mrow">
+      <div class="mfield"><label>Tax %</label><input id="qt-tax" type="number" value="0" min="0" max="100" step="0.1" style="font-size:13px"/></div>
+      <div class="mfield"><label>Total</label><input id="qt-grand" readonly style="font-size:16px;font-weight:700;color:#1e3a8a;background:#f0f4ff"/></div>
+    </div>
+    <div class="mfield"><label>Notes / Terms</label><textarea id="qt-notes" placeholder="Payment terms, notes..."></textarea></div>
+    <div class="mfield"><label>Action</label>
+      <select id="qt-send">
+        <option value="preview">Preview in new tab</option>
+        <option value="email">Email to client</option>
+      </select>
+    </div>
+    <div class="modal-btns">
+      <button class="btn" onclick="closeAllModals()">Cancel</button>
+      <button class="btn primary" onclick="generateQuote(${m.clientIdx})">📄 Generate</button>
+    </div>
+  </div>`;
+}
+
+function addQtLine(){
+  const lines=document.getElementById('qt-lines');
+  const div=document.createElement('div');
+  div.className='qt-line';
+  div.style.cssText='display:grid;grid-template-columns:1fr 70px 80px 80px 30px;gap:5px;margin-bottom:4px';
+  div.innerHTML=`<input class="qt-desc" placeholder="Item description" style="font-size:12px;padding:5px 8px;border:1.5px solid #cbd5e1;border-radius:6px"/>
+    <input class="qt-qty" type="number" placeholder="1" min="0" style="font-size:12px;padding:5px 8px;border:1.5px solid #cbd5e1;border-radius:6px" oninput="calcQtTotal()"/>
+    <input class="qt-price" type="number" placeholder="0.00" min="0" step="0.01" style="font-size:12px;padding:5px 8px;border:1.5px solid #cbd5e1;border-radius:6px" oninput="calcQtTotal()"/>
+    <input class="qt-total" readonly placeholder="0.00" style="font-size:12px;padding:5px 8px;border:1.5px solid #e2e8f0;border-radius:6px;background:#f8fafc"/>
+    <button onclick="this.closest('.qt-line').remove();calcQtTotal()" style="font-size:14px;background:none;border:none;cursor:pointer;color:#ccc">✕</button>`;
+  lines.appendChild(div);
+  div.querySelector('.qt-desc').focus();
+}
+
+function calcQtTotal(){
+  let subtotal=0;
+  document.querySelectorAll('.qt-line').forEach(l=>{
+    const qty=parseFloat(l.querySelector('.qt-qty')?.value)||0;
+    const price=parseFloat(l.querySelector('.qt-price')?.value)||0;
+    const total=qty*price;
+    const totalEl=l.querySelector('.qt-total');
+    if(totalEl)totalEl.value=total>0?total.toFixed(2):'';
+    subtotal+=total;
+  });
+  const tax=parseFloat(document.getElementById('qt-tax')?.value)||0;
+  const grand=subtotal*(1+tax/100);
+  const grandEl=document.getElementById('qt-grand');
+  if(grandEl)grandEl.value='$'+grand.toFixed(2);
+}
+
 // ── STARTUP ──────────────────────────────────────────────────────────────────
-try{ render(); } catch(e){ 
-  console.error('Initial render failed:',e);
+// Debug panel — shows on screen so you don't need devtools
+(function(){
+  const dbg=document.createElement('div');
+  dbg.id='_dbg';
+  dbg.style.cssText='position:fixed;bottom:0;left:0;right:0;max-height:180px;overflow-y:auto;background:#1e1e1e;color:#4eff91;font-family:monospace;font-size:11px;padding:8px;z-index:9999;border-top:2px solid #4eff91';
+  dbg.innerHTML='<div style="color:#aaa;margin-bottom:4px">Debug console — remove after fixing</div>';
+  document.body.appendChild(dbg);
+  window._dbgLog=function(msg,color){
+    const line=document.createElement('div');
+    line.style.color=color||'#4eff91';
+    line.textContent=msg;
+    dbg.appendChild(line);
+    dbg.scrollTop=dbg.scrollHeight;
+  };
+  // Override console.error to show on screen
+  const origErr=console.error;
+  console.error=function(){
+    origErr.apply(console,arguments);
+    window._dbgLog('ERROR: '+Array.from(arguments).join(' '),'#ff6b6b');
+  };
+  const origWarn=console.warn;
+  console.warn=function(){
+    origWarn.apply(console,arguments);
+    window._dbgLog('WARN: '+Array.from(arguments).join(' '),'#ffd93d');
+  };
+  window._dbgLog('Script loaded OK');
+  window._dbgLog('SHEETS_URL: '+(typeof SHEETS_URL!=='undefined'?SHEETS_URL.slice(0,50)+'...':'UNDEFINED'));
+  window._dbgLog('S defined: '+(typeof S!=='undefined'));
+  window._dbgLog('render defined: '+(typeof render==='function'));
+})();
+
+try{
+  window._dbgLog&&window._dbgLog('Calling render()...');
+  render();
+  window._dbgLog&&window._dbgLog('render() completed OK','#4eff91');
+} catch(e){ 
+  console.error('Initial render failed: '+e.message);
+  window._dbgLog&&window._dbgLog('render() THREW: '+e.message+' | '+String(e.stack).slice(0,200),'#ff6b6b');
   const _tc=document.getElementById('tab-content');
-  const _errHtml='<div style="padding:30px;color:#991b1b;font-size:13px;font-family:monospace;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;margin:20px"><strong>Render error (v2):</strong> '+e.message+'<br><pre style="margin-top:10px;font-size:11px;white-space:pre-wrap">'+String(e.stack).slice(0,500)+'</pre></div>';
+  const _errHtml='<div style="padding:30px;color:#991b1b;font-size:13px;font-family:monospace;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;margin:20px"><strong>Render error:</strong> '+e.message+'<br><pre style="margin-top:10px;font-size:11px;white-space:pre-wrap">'+String(e.stack).slice(0,500)+'</pre></div>';
   if(_tc){_tc.innerHTML=_errHtml;}
   else{document.body.innerHTML+=_errHtml;}
 }
