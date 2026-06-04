@@ -198,9 +198,9 @@ html,body{height:100%;overflow:hidden;background:#f1f5f9}
 
 <script>
 // ════════════════════════════════════════════════════════════════════════
-//  ▼▼▼  PASTE YOUR GOOGLE APPS SCRIPT URL HERE  ▼▼▼
+//  ▼▼▼  GOOGLE APPS SCRIPT URL  ▼▼▼
 // ════════════════════════════════════════════════════════════════════════
-const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbzBvTr1nXLHMSzl07xpyAcEyN6u0Mk63h3l9NDOrDVGLkCmy28wObL0r-YGzvOhQvHNhQ/exec';  // ← your Apps Script URL
+const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbxUmnJghQC879g_B5riL00ehjuiolmueSRylvUgSzcq6m3pla3Px17W90hDQ7FMKJo4QQ/exec';
 // ════════════════════════════════════════════════════════════════════════
 //  ▼▼▼  GOOGLE DRIVE FOLDER ID FOR FILE UPLOADS  ▼▼▼
 //  1. Create a folder in Google Drive e.g. "IUS Workspace Files"
@@ -402,6 +402,15 @@ async function diagnoseSheetsURL(){
 
   log('URL: '+SHEETS_URL.slice(0,60)+'...');
   log('Testing connection...');
+  log('Step 1: Opening URL in new tab so you can see what Google returns...');
+
+  // Open the URL directly so user can see the raw response
+  const directUrl=SHEETS_URL+'?action=load&callback=test';
+  advice(`<strong>Open this URL in a new tab</strong> — if it shows a login page, you need to re-authorize:<br>
+    <a href="${directUrl}" target="_blank" style="color:#1e3a8a;word-break:break-all;font-size:11px">${directUrl}</a><br><br>
+    <strong>If it shows JSON</strong> → script works, click 🔄 Reload<br>
+    <strong>If it shows a Google login page</strong> → see authorization steps below<br>
+    <strong>If it shows an error</strong> → paste the error text here`);
 
   try{
     const data=await sheetsGet({action:'load'},12000);
