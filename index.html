@@ -532,11 +532,15 @@ function mergeFromSheets(data){
     }
   }
   if(data.tasks){
-    S.tasks=data.tasks.map(t=>({
+    const fromSheetsTasks=data.tasks.map(t=>({
       id:String(t['ID']||t.id||''),name:String(t['Name']||t.name||''),
       secId:String(t['Section ID']||t.secId||''),status:String(t['Status']||t.status||'normal'),
       due:String(t['Due Date']||t.due||''),notes:String(t['Notes']||t.notes||'')
     })).filter(t=>t.id&&t.name);
+    // Additive merge: keep local tasks not yet in Sheets, update existing from Sheets
+    const sheetsTaskIds=new Set(fromSheetsTasks.map(t=>t.id));
+    const localOnly=S.tasks.filter(t=>!sheetsTaskIds.has(t.id));
+    S.tasks=[...fromSheetsTasks,...localOnly];
   }
   if(data.archived){
     S.archived=data.archived.map(a=>({
@@ -555,7 +559,7 @@ function mergeFromSheets(data){
     })).filter(e=>e.id);
   }
   if(data.recurRules){
-    S.recurRules=data.recurRules.map(r=>({
+    const fromSheetsRR=data.recurRules.map(r=>({
       id:String(r['ID']||r.id||''),title:String(r['Title']||r.title||''),
       freq:String(r['Frequency']||r.freq||'Weekly'),
       startDate:String(r['Start Date']||r.startDate||''),
@@ -563,6 +567,21 @@ function mergeFromSheets(data){
       cat:String(r['Category']||r.cat||''),
       hour:parseInt(r['Hour']||r.hour)||8,note:String(r['Note']||r.note||'')
     })).filter(r=>r.id);
+    // Merge: keep local rules, add any new ones from Sheets, update existing
+    const localRRIds=new Set(S.recurRules.map(r=>r.id));
+    fromSheetsRR.forEach(r=>{
+      if(!localRRIds.has(r.id)){
+        S.recurRules.push(r); // New rule from Sheets (added by other user)
+      } else {
+        // Update existing rule from Sheets only if it exists there
+        const local=S.recurRules.find(lr=>lr.id===r.id);
+        if(local) Object.assign(local,r);
+      }
+    });
+    // Only fully replace if Sheets has MORE rules (Sheets is definitively ahead)
+    if(fromSheetsRR.length>S.recurRules.length){
+      S.recurRules=fromSheetsRR;
+    }
   }
   if(data.clients&&data.clients.length){
     const baseMap={};
@@ -737,7 +756,7 @@ function generateRecurEvents(){
       else if(rule.freq==='Last Friday'){if(dow===5){const nx=new Date(d);nx.setDate(d.getDate()+7);hit=nx.getMonth()!==d.getMonth();}}
       if(hit&&!existDates.has(ds)){
         S.events.push({
-          id:'re'+Date.now()+Math.random().toString(36).slice(2),
+          id:'re'+(Date.now()+Math.floor(Math.random()*999999)).toString(36),
           recurId:rule.id,title:rule.title,cat:rule.cat,
           date:ds,hour:rule.hour,note:rule.note||''
         });
@@ -1505,7 +1524,14 @@ function saveRecur(){
   } else {
     const rule={id:'rr'+Date.now(),title,freq,startDate,endDate,cat,hour,note};
     S.recurRules.push(rule);
-    save();
+    // Save immediately — don't let poll overwrite before debounce fires
+    saveToLocal();
+    updateCounts();
+    if(SHEETS_URL){
+      clearTimeout(_syncDebounce);
+      _syncDebounce=setTimeout(syncToSheets,5000);
+      setSyncStatus('Unsaved changes…');
+    }
   }
   render();
 }
@@ -1990,7 +2016,7 @@ function buildEmailModal(){
   return `<div class="mbox" onclick="event.stopPropagation()" style="width:540px">
     <h3>✉ Send Email — ${c.company}</h3>
     <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:12px;color:#0369a1;display:flex;align-items:center;gap:8px">
-      <span>📤</span><span>Sends from <strong>iuniformsolutions@gmail.com</strong> via Apps Script · recipient sees a branded email</span>
+      <span>📤</span><span>Sends from <strong>leo@iuniformsolutions.com</strong> via Apps Script · recipient sees a branded email</span>
     </div>
     <div class="mrow">
       <div class="mfield"><label>To (email)</label>
@@ -2112,7 +2138,7 @@ async function generateQuote(idx){
 
   const htmlBody=`<div style="font-family:Arial,sans-serif;max-width:650px;margin:0 auto;border:2px solid #e2e8f0;border-radius:12px;overflow:hidden">
     <div style="background:#1a2e44;padding:20px 28px;text-align:center">
-      <img src="https://innovative1363.github.io/leosworkspace/Logo_PNG.png" alt="Innovative Uniform Solutions" style="height:55px;width:auto"/>
+      <img src="https://innovative1363.github.io/leosworkspace/Logo%20PNG.png" alt="Innovative Uniform Solutions" style="height:55px;width:auto"/>
     </div>
     <div style="background:#8cc63f;height:4px;font-size:1px">&nbsp;</div>
     <div style="padding:24px 28px;background:#fff">
@@ -2344,7 +2370,7 @@ function bindLiveInputs(){
         +'We specialize in custom security uniforms, patches, embroidery, and tactical gear at competitive pricing.\n\n'
         +(lastNote?'Re our last conversation: '+lastNote.slice(0,120)+'\n\n':'')
         +'Please let me know if you have any questions or would like a sample.\n\n'
-        +'Best regards,\nLeo\nInnovative Uniform Solutions\niuniformsolutions.com';
+        +'Best regards,\nLeo\nSales Manager · Innovative Uniform Solutions\n562-254-1065\nleo@iuniformsolutions.com\niuniformsolutions.com';
     }
   }
   const cs=document.getElementById('csearch-input');
