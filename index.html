@@ -189,6 +189,7 @@ html,body{height:100%;overflow:hidden;background:#f1f5f9}
     <div class="sync-bar">
       <span class="sync-status" id="sync-status">Connecting…</span>
       <button class="btn" style="font-size:11px;padding:4px 10px" onclick="showEmailSetup()" title="Set up daily email reminders">📧 Email setup</button>
+      <button class="btn" style="font-size:11px;padding:4px 10px" onclick="diagnoseSheetsURL()" title="Test Apps Script connection">🔍 Test</button>
       <button class="btn" style="font-size:11px;padding:4px 10px" onclick="reloadFromSheets()" title="Reload latest data from Sheets">🔄 Reload</button>
     </div>
   </div>
@@ -346,19 +347,90 @@ let _loadedFromSheets=false;
 let _syncing=false;
 
 // ── JSONP helper — reads responses from Apps Script ───────────────────────────
-function sheetsGet(params, timeoutMs=20000){
+function sheetsGet(params, timeoutMs=25000){
   return new Promise((resolve,reject)=>{
-    if(!SHEETS_URL){reject(new Error('No SHEETS_URL'));return;}
+    if(!SHEETS_URL){reject(new Error('No SHEETS_URL configured'));return;}
     const cb='_sc'+Date.now()+Math.random().toString(36).slice(2);
     const qs=Object.entries(params).map(([k,v])=>k+'='+encodeURIComponent(v)).join('&');
     const s=document.createElement('script');
     s.src=SHEETS_URL+'?'+qs+'&callback='+cb;
     let done=false;
-    window[cb]=r=>{if(done)return;done=true;try{document.body.removeChild(s);}catch(e){}delete window[cb];resolve(r);};
-    s.onerror=()=>{if(done)return;done=true;try{document.body.removeChild(s);}catch(e){}delete window[cb];reject(new Error('Script error'));};
-    setTimeout(()=>{if(done)return;done=true;try{document.body.removeChild(s);}catch(e){}delete window[cb];reject(new Error('Timeout'));},timeoutMs);
+    window[cb]=r=>{
+      if(done)return;done=true;
+      try{document.body.removeChild(s);}catch(e){}
+      delete window[cb];
+      resolve(r);
+    };
+    s.onerror=()=>{
+      if(done)return;done=true;
+      try{document.body.removeChild(s);}catch(e){}
+      delete window[cb];
+      // "Script error" = Google redirected to login page (not JS) OR deployment not public
+      reject(new Error('SCRIPT_LOAD_FAILED'));
+    };
+    setTimeout(()=>{
+      if(done)return;done=true;
+      try{document.body.removeChild(s);}catch(e){}
+      delete window[cb];
+      reject(new Error('TIMEOUT'));
+    },timeoutMs);
     document.body.appendChild(s);
   });
+}
+
+// ── Diagnose Apps Script connection ──────────────────────────────────────────
+async function diagnoseSheetsURL(){
+  const overlay=document.createElement('div');
+  overlay.className='moverlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove();};
+  overlay.innerHTML=`<div class="mbox" style="width:500px" onclick="event.stopPropagation()">
+    <h3>🔍 Apps Script Connection Test</h3>
+    <div id="diag-log" style="font-size:12px;font-family:monospace;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:12px;min-height:80px;line-height:1.8"></div>
+    <div style="margin-top:14px;font-size:12px;color:#374151" id="diag-advice"></div>
+    <div class="modal-btns"><button class="btn primary" onclick="this.closest('.moverlay').remove()">Close</button></div>
+  </div>`;
+  document.body.appendChild(overlay);
+
+  const log=(msg,color='#111')=>{
+    const el=document.getElementById('diag-log');
+    if(el)el.innerHTML+=`<div style="color:${color}">${msg}</div>`;
+  };
+  const advice=(html)=>{
+    const el=document.getElementById('diag-advice');
+    if(el)el.innerHTML=html;
+  };
+
+  log('URL: '+SHEETS_URL.slice(0,60)+'...');
+  log('Testing connection...');
+
+  try{
+    const data=await sheetsGet({action:'load'},12000);
+    if(data&&data.status==='ok'){
+      log('✅ Connected! Got '+((data.tasks||[]).length)+' tasks, '+((data.clients||[]).length)+' clients','#065f46');
+      advice('<strong style="color:#065f46">Connection is working.</strong> If the app still shows offline, click 🔄 Reload.');
+    } else {
+      log('⚠️ Connected but got error: '+(data&&data.message||JSON.stringify(data)),'#92400e');
+      advice('<strong>The script responded but with an error.</strong> Check the Apps Script logs at script.google.com → Executions.');
+    }
+  } catch(err){
+    if(err.message==='SCRIPT_LOAD_FAILED'){
+      log('❌ Script load failed — Google returned a non-JS response','#991b1b');
+      log('Most likely cause: deployment is set to "Only myself"','#991b1b');
+      advice(`<strong>Fix: Re-deploy your Apps Script as public.</strong><br><br>
+        1. Go to <a href="https://script.google.com" target="_blank" style="color:#1e3a8a">script.google.com</a><br>
+        2. Open your IUS Workspace project<br>
+        3. Click <strong>Deploy → Manage deployments</strong><br>
+        4. Click the ✏ pencil on your deployment<br>
+        5. Under "Who has access" → change to <strong>Anyone</strong><br>
+        6. Click <strong>Deploy</strong> (same URL, no changes needed in the HTML)<br><br>
+        <a href="${SHEETS_URL}" target="_blank" style="color:#1e3a8a">Open the URL directly to verify it returns JSON →</a>`);
+    } else if(err.message==='TIMEOUT'){
+      log('⏱️ Request timed out after 12 seconds','#991b1b');
+      advice('<strong>The Apps Script is not responding.</strong> It may be in a quota limit or the spreadsheet is too large. Try opening the URL directly to check.');
+    } else {
+      log('❌ Error: '+err.message,'#991b1b');
+    }
+  }
 }
 
 // ── LOAD — pulls everything from Sheets on startup ───────────────────────────
@@ -411,8 +483,16 @@ async function load(){
       setSyncStatus('⚠ Load error — using local data','err');
     }
   }catch(err){
-    setSyncStatus('⚠ Offline — using local data','err');
-    console.warn('Sheets load failed:',err);
+    if(err.message==='SCRIPT_LOAD_FAILED'){
+      setSyncStatus('⚠ Not connected — click 🔍 Test to diagnose','err');
+      console.warn('Sheets load failed: deployment may not be public. Click Test button to diagnose.');
+    } else if(err.message==='TIMEOUT'){
+      setSyncStatus('⚠ Timed out — using local data','err');
+      console.warn('Sheets load timed out');
+    } else {
+      setSyncStatus('⚠ Offline — using local data','err');
+      console.warn('Sheets load failed:',err);
+    }
   }
   updateCounts();
 }
@@ -566,7 +646,11 @@ async function reloadFromSheets(){
       setSyncStatus('Reload failed — '+((data&&data.message)||'check URL'),'err');
     }
   }catch(e){
-    setSyncStatus('⚠ Reload failed — offline?','err');
+    if(e.message==='SCRIPT_LOAD_FAILED'){
+      setSyncStatus('⚠ Reload failed — deployment not public? Click 🔍 Test','err');
+    } else {
+      setSyncStatus('⚠ Reload failed — '+e.message,'err');
+    }
   }
 }
 
