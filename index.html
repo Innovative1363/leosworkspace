@@ -919,11 +919,17 @@ function renderClients(){
         </div>
         <div class="notes-section">
           <div class="notes-header">📋 Activity history (${sel.notes?sel.notes.length:0})</div>
-          ${sel.notes&&sel.notes.length?sel.notes.map(n=>`<div class="note-row"><div class="note-date">${n.date||'—'}</div>${n.type?`<span class="note-type-badge">${n.type}</span>`:'<span style="width:2px"></span>'}<div class="note-text">${n.note}</div></div>`).join(''):'<div style="padding:12px;color:#94a3b8;font-size:13px">No history yet</div>'}
+          ${sel.notes&&sel.notes.length?sel.notes.map((n,ni)=>`<div class="note-row" id="note-row-${idx}-${ni}">
+              <div class="note-date">${n.date||'—'}</div>
+              ${n.type?`<span class="note-type-badge">${n.type}</span>`:'<span style="width:2px"></span>'}
+              <div class="note-text" style="flex:1">${n.note}</div>
+              <button onclick="editNote(${idx},${ni})" style="flex-shrink:0;background:none;border:1px solid #e2e8f0;border-radius:4px;padding:1px 7px;font-size:10px;color:#64748b;cursor:pointer;margin-left:6px" title="Edit this note">✏</button>
+              <button onclick="deleteNote(${idx},${ni})" style="flex-shrink:0;background:none;border:1px solid #fca5a5;border-radius:4px;padding:1px 7px;font-size:10px;color:#ef4444;cursor:pointer;margin-left:3px" title="Delete this note">✕</button>
+            </div>`).join(''):'<div style="padding:12px;color:#94a3b8;font-size:13px">No history yet</div>'}
         </div>
         <div class="add-note-section">
-          <div class="add-note-header">✏ Add new note</div>
-          <div class="add-note-body">
+          <div class="add-note-header" id="add-note-hdr-${idx}">✏ Add new note</div>
+          <div class="add-note-body"><input type="hidden" id="editing-note-idx-${idx}" value=""/>
             <div style="display:flex;gap:8px;margin-bottom:9px;flex-wrap:wrap">
               <input type="date" id="note-date" value="${todayStr()}" class="ani" style="flex:1;min-width:130px"/>
               <select id="note-type" class="ani" style="flex:1;min-width:120px"><option>Phone Call</option><option>Email</option><option>Visit</option><option>Follow Up</option><option>Note</option></select>
@@ -1227,8 +1233,15 @@ function dropSecReorder(e,targetId){
 }
 function calClick(el){S.calModal={date:el.dataset.date,hour:parseInt(el.dataset.hour)};render();}
 function delEv(id){
+  // If this event is linked to a task, also remove that task
+  const ev=S.events.find(e=>e.id===id);
+  if(ev&&ev.taskId){
+    S.tasks=S.tasks.filter(t=>t.id!==ev.taskId);
+    sheetsDelete('deleteTask',ev.taskId);
+  }
   S.events=S.events.filter(e=>e.id!==id);
   sheetsDelete('deleteEvent',id);
+  save();
   render();
 }
 function prevW(){S.weekOffset--;render();}function nextW(){S.weekOffset++;render();}
@@ -1239,10 +1252,12 @@ function openAdd(sid){S.modal={mode:'add',secId:sid||S.sections[0]?.id};S.editId
 function openEdit(id){S.modal={mode:'edit'};S.editId=id;render();}
 function archiveTask(id){
   const t=S.tasks.find(x=>x.id===id);if(!t)return;
-  const archived={...t,archivedAt:new Date().toISOString()};
+  // Deep copy to avoid reference issues
+  const archived=JSON.parse(JSON.stringify({...t,archivedAt:new Date().toISOString()}));
   S.archived.push(archived);
   S.tasks=S.tasks.filter(x=>x.id!==id);
-  S.events=S.events.filter(e=>e.taskId!==id);
+  // Remove ALL events linked to this task (not just by taskId — also by matching title+date)
+  S.events=S.events.filter(e=>e.taskId!==id&&!(e.title===t.name&&!e.recurId));
   save();
   render();
 }
@@ -1251,9 +1266,28 @@ function restoreTask(id){
   const{archivedAt,...t}=a;
   S.tasks.push(t);
   S.archived=S.archived.filter(x=>x.id!==id);
+  // Restore the calendar event if the task had a due date
+  if(t.due){
+    // Only add back if no event already exists for this task
+    const alreadyHasEvent=S.events.some(e=>e.taskId===t.id);
+    if(!alreadyHasEvent){
+      const sec=S.sections.find(s=>s.id===t.secId);
+      const cat=sec?sec.cat||sec.name:'Other';
+      S.events.push({
+        id:'e'+Date.now(),
+        taskId:t.id,
+        title:t.name,
+        cat,
+        date:t.due,
+        hour:9,
+        note:(t.notes||'').slice(0,60)
+      });
+    }
+  }
   save();
   sheetsDelete('deleteTask',id+'&type=archived');
-  S.tab='planner';render();
+  S.tab='planner';
+  render();
 }
 function permDelete(id){
   S.archived=S.archived.filter(x=>x.id!==id);
@@ -1271,6 +1305,8 @@ function delTask(id){
   S.tasks=S.tasks.filter(t=>t.id!==id);
   S.events=S.events.filter(e=>e.taskId!==id);
   sheetsDelete('deleteTask',id);
+  save();
+  render();
 }
 function renSec(id){
   const s=S.sections.find(x=>x.id===id);if(!s)return;
@@ -1460,25 +1496,36 @@ function saveNote(idx){
   const stage=document.getElementById('note-stage').value;
   const c=S.clients[idx];
   if(!c.notes)c.notes=[];
+
+  // Check if we're editing an existing note
+  const editingEl=document.getElementById('editing-note-idx-'+idx);
+  const editingIdx=editingEl&&editingEl.value!==''?parseInt(editingEl.value):-1;
+
+  if(editingIdx>=0&&editingIdx<c.notes.length){
+    // Update existing note in place
+    c.notes[editingIdx]={date,type,note:text};
+    if(stage)c.stage=stage;
+    save();
+    render();
+    return;
+  }
+
+  // New note
   const note={date,type,note:text};
   c.notes.push(note);
   if(stage)c.stage=stage;
-  // Save note to Sheets
   save();
-  // If stage changed, update client record too
-  if(stage) save();
-  // Also add to planner + calendar
-  const sec=S.sections.find(s=>s.name==='Reach Out')||S.sections[0];
-  const id='t'+Date.now();
-  const task={id,name:c.company,secId:sec.id,status:'normal',due:date,notes:text.slice(0,120),clientIdx:idx};
+
+  // Add to planner + calendar only for new notes
+  const sec=S.sections.find(s=>s.name==='Follow Up')||S.sections.find(s=>s.name==='Reach Out')||S.sections[0];
+  const taskId='t'+Date.now();
+  const task={id:taskId,name:c.company,secId:sec.id,status:'normal',due:date,notes:text.slice(0,120),clientIdx:idx};
   S.tasks.push(task);
-  save();
   if(date){
-    const ev={id:'ev'+Date.now(),taskId:id,title:c.company,cat:sec.cat||'Reach Out',date,hour:9,note:text.slice(0,60)};
+    const ev={id:'ev'+Date.now(),taskId:taskId,title:c.company,cat:sec.cat||'Reach Out',date,hour:9,note:text.slice(0,60)};
     S.events.push(ev);
-    save();
   }
-  textEl.value='';
+  save();
   render();
 }
 
@@ -1863,7 +1910,7 @@ async function sendClientEmail(idx){
   try{
     const result=await sheetsGet({
       action:'sendEmail',
-      data:encodeURIComponent(JSON.stringify({to,cc,subject:subj,body,company:S.clients[idx].company}))
+      data:JSON.stringify({to,cc,subject:subj,body,company:S.clients[idx].company})
     });
     if(result&&result.status==='ok'){
       setSyncStatus('✓ Email sent to '+to,'ok');
@@ -2052,10 +2099,10 @@ async function generateQuote(idx){
   try{
     const result=await sheetsGet({
       action:'sendEmail',
-      data:encodeURIComponent(JSON.stringify({
-        to:email,subject:'Quote #'+num+' — Innovative Uniform Solutions',
+      data:JSON.stringify({
+        to:email,subject:'Quote #'+num+' - Innovative Uniform Solutions',
         htmlBody,company:c.company,isHtml:true
-      }))
+      })
     });
     if(result&&result.status==='ok'){
       // Log it
@@ -2162,13 +2209,13 @@ async function saveFollowUpSchedule(idx){
     try{
       await sheetsGet({
         action:'sendEmail',
-        data:encodeURIComponent(JSON.stringify({
+        data:JSON.stringify({
           to:'iuniformsolutions@gmail.com',
           sendAt:date,
           subject:'Follow-Up Reminder: '+c.company+' - '+date,
           body:'Follow-up reminder for '+c.company+'.\n\nMethod: '+method+'\nDate: '+date+'\nTime: '+time+'\n\n'+(note||'No additional notes.'),
           company:c.company
-        }))
+        })
       });
       setSyncStatus('✓ Scheduled + reminder email sent','ok');
     }catch(e){
@@ -2178,6 +2225,38 @@ async function saveFollowUpSchedule(idx){
     setSyncStatus('✓ Follow-up added to planner','ok');
   }
   closeAllModals();
+}
+
+// ── NOTE EDIT / DELETE ────────────────────────────────────────────────────────
+function editNote(clientIdx, noteIdx){
+  const c=S.clients[clientIdx];
+  const n=c.notes[noteIdx];
+  if(!n)return;
+  // Populate the add-note form with this note's data
+  const dateEl=document.getElementById('note-date');
+  const typeEl=document.getElementById('note-type');
+  const textEl=document.getElementById('note-text');
+  const editingEl=document.getElementById('editing-note-idx-'+clientIdx);
+  const hdrEl=document.getElementById('add-note-hdr-'+clientIdx);
+  if(dateEl)dateEl.value=n.date||'';
+  if(typeEl)typeEl.value=n.type||'Phone Call';
+  if(textEl){textEl.value=n.note||'';textEl.focus();}
+  if(editingEl)editingEl.value=String(noteIdx);
+  if(hdrEl)hdrEl.textContent='✏ Editing note '+(noteIdx+1)+' of '+c.notes.length+' — Save to update';
+  hdrEl&&(hdrEl.style.background='#b45309');
+  // Scroll to the form
+  const form=document.querySelector('.add-note-section');
+  if(form)form.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+function deleteNote(clientIdx, noteIdx){
+  const c=S.clients[clientIdx];
+  if(!c.notes||!c.notes[noteIdx])return;
+  const n=c.notes[noteIdx];
+  if(!confirm('Delete this note? '+n.note.slice(0,60)))return;
+  c.notes.splice(noteIdx,1);
+  save();
+  render();
 }
 
 function bindLiveInputs(){
