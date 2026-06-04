@@ -576,8 +576,8 @@ function mergeFromSheets(data){
     const fromSheetsRR=data.recurRules.map(r=>({
       id:String(r['ID']||r.id||''),title:String(r['Title']||r.title||''),
       freq:String(r['Frequency']||r.freq||'Weekly'),
-      startDate:String(r['Start Date']||r.startDate||''),
-      endDate:String(r['End Date']||r.endDate||''),
+      startDate:normDate(r['Start Date']||r.startDate||''),
+      endDate:normDate(r['End Date']||r.endDate||''),
       cat:String(r['Category']||r.cat||''),
       hour:parseInt(r['Hour']||r.hour)||8,note:String(r['Note']||r.note||'')
     })).filter(r=>r.id);
@@ -779,8 +779,8 @@ function hardResetFromSheets(data){
     const fromSheetsRR=data.recurRules.map(r=>({
       id:String(r['ID']||r.id||''),title:String(r['Title']||r.title||''),
       freq:String(r['Frequency']||r.freq||'Weekly'),
-      startDate:String(r['Start Date']||r.startDate||''),
-      endDate:String(r['End Date']||r.endDate||''),
+      startDate:normDate(r['Start Date']||r.startDate||''),
+      endDate:normDate(r['End Date']||r.endDate||''),
       cat:String(r['Category']||r.cat||''),
       hour:parseInt(r['Hour']||r.hour)||8,note:String(r['Note']||r.note||'')
     })).filter(r=>r.id);
@@ -828,6 +828,22 @@ function sheetsDelete(action,id){
 // ── CORE HELPERS ──────────────────────────────────────────────────────────────
 function fmtDate(d){return d.toISOString().slice(0,10);}
 function todayStr(){return fmtDate(new Date());}
+// Normalize any date value to YYYY-MM-DD (handles Sheets Date objects and long strings)
+function normDate(v){
+  if(!v)return '';
+  if(typeof v==='object'&&v instanceof Date){
+    return fmtDate(v);
+  }
+  const s=String(v);
+  // Already YYYY-MM-DD
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s))return s;
+  // Try parsing as date
+  try{
+    const d=new Date(s);
+    if(!isNaN(d.getTime()))return fmtDate(d);
+  }catch(e){}
+  return '';
+}
 function getMonday(off){const d=new Date();const day=d.getDay();const m=new Date(d);m.setDate(d.getDate()-(day===0?6:day-1)+off*7);m.setHours(0,0,0,0);return m;}
 function weekDays(m){return Array.from({length:7},(_,i)=>{const d=new Date(m);d.setDate(m.getDate()+i);return d;});}
 function fmtShort(d){return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});}
