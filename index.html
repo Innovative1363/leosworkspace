@@ -784,13 +784,16 @@ function hardResetFromSheets(data){
       cat:String(r['Category']||r.cat||''),
       hour:parseInt(r['Hour']||r.hour)||8,note:String(r['Note']||r.note||'')
     })).filter(r=>r.id);
-    // Only replace if Sheets has rules; if empty keep local (rules may not have synced yet)
-    if(fromSheetsRR.length>0){
+    if(fromSheetsRR.length>=S.recurRules.length){
+      // Sheets has same or more rules — it's authoritative
       S.recurRules=fromSheetsRR;
-    } else if(S.recurRules.length>0){
-      // Keep local rules — Sheets RecurRules tab may be empty/stale
-      // Schedule a save to push local rules to Sheets
-      if(!_pendingSave){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,3000); }
+    } else {
+      // Local has more rules — they haven't synced yet, keep local
+      // but merge in any Sheets rules we don't have
+      const localIds=new Set(S.recurRules.map(r=>r.id));
+      fromSheetsRR.forEach(r=>{ if(!localIds.has(r.id)) S.recurRules.push(r); });
+      // Push local rules to Sheets since it's missing some
+      if(!_pendingSave){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,2000); }
     }
   }
   if(data.clients&&data.clients.length){
@@ -1632,14 +1635,8 @@ function saveRecur(){
   } else {
     const rule={id:'rr'+Date.now(),title,freq,startDate,endDate,cat,hour,note};
     S.recurRules.push(rule);
-    // Save immediately — don't let poll overwrite before debounce fires
-    saveToLocal();
-    updateCounts();
-    if(SHEETS_URL){
-      clearTimeout(_syncDebounce);
-      _syncDebounce=setTimeout(syncToSheets,5000);
-      setSyncStatus('Unsaved changes…');
-    }
+    // Use save() so _pendingSave=true blocks poll during sync window
+    save();
   }
   render();
 }
@@ -1647,6 +1644,7 @@ function delRecur(id){
   S.recurRules=S.recurRules.filter(r=>r.id!==id);
   S.events=S.events.filter(e=>e.recurId!==id);
   sheetsDelete('deleteRecur',id);
+  save();
   render();
 }
 function checkDuplicateClient(val){
