@@ -1548,7 +1548,13 @@ function dropSec(e,sid){
   e.preventDefault();
   if(!dragId)return;
   const t=S.tasks.find(x=>x.id===dragId);
-  if(t){t.secId=sid;save();}
+  if(t){
+    t.secId=sid;
+    saveToLocal();
+    sheetsSaveTask(t).then(ok=>{
+      if(!ok){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,3000); }
+    });
+  }
   dragId=null;render();
 }
 
@@ -1592,7 +1598,11 @@ function archiveTask(id){
   S.tasks=S.tasks.filter(x=>x.id!==id);
   S.events=S.events.filter(e=>e.taskId!==id&&!(e.title===t.name&&!e.recurId));
   saveToLocal();
-  sheetsArchiveTask(archived).then(ok=>{
+  Promise.all([
+    sheetsArchiveTask(archived),
+    sheetsDeleteTask(id,'task')
+  ]).then(([ok])=>{
+    setSyncStatus(ok?'✓ Saved '+new Date().toLocaleTimeString():'⚠ Save failed',ok?'ok':'err');
     if(!ok){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,3000); }
   });
   render();
@@ -1602,26 +1612,22 @@ function restoreTask(id){
   const{archivedAt,...t}=a;
   S.tasks.push(t);
   S.archived=S.archived.filter(x=>x.id!==id);
-  // Restore the calendar event if the task had a due date
+  let restoredEv=null;
   if(t.due){
-    // Only add back if no event already exists for this task
     const alreadyHasEvent=S.events.some(e=>e.taskId===t.id);
     if(!alreadyHasEvent){
       const sec=S.sections.find(s=>s.id===t.secId);
       const cat=sec?sec.cat||sec.name:'Other';
-      S.events.push({
-        id:'e'+Date.now(),
-        taskId:t.id,
-        title:t.name,
-        cat,
-        date:t.due,
-        hour:9,
-        note:(t.notes||'').slice(0,60)
-      });
+      restoredEv={id:'e'+Date.now(),taskId:t.id,title:t.name,cat,date:t.due,hour:9,note:(t.notes||'').slice(0,60)};
+      S.events.push(restoredEv);
     }
   }
-  save();
-  sheetsDelete('deleteTask',id+'&type=archived');
+  saveToLocal();
+  Promise.all([
+    sheetsSaveTask(t),
+    sheetsDeleteTask(id,'archived'),
+    restoredEv?sheetsSaveEvent(restoredEv):Promise.resolve(true)
+  ]).then(()=>{});
   S.tab='planner';
   render();
 }
@@ -2775,21 +2781,28 @@ try{ render(); } catch(e){ console.error('Render failed:',e); }
     }catch(e){/* silent poll failure */}
   },20000);
 
-  // Sync immediately when tab becomes visible
+  // Auto-reload when switching back to tab — READ ONLY, never writes
   document.addEventListener('visibilitychange',async()=>{
-    if(document.visibilityState==='visible'&&SHEETS_URL&&!_pendingSave&&!_syncing){
+    if(document.visibilityState==='visible'&&SHEETS_URL&&!_syncing){
+      // Don't load if user has unsaved changes pending
+      if(_pendingSave)return;
       try{
         const data=await sheetsGet({action:'load'},15000);
-        if(data&&data.status==='ok'){
-          // Safety: don't overwrite local if Sheets has fewer tasks
-        if((data.tasks||[]).length>=S.tasks.length){
-          hardResetFromSheets(data);
+        if(!data||data.status!=='ok')return;
+        // Only update if Sheets has data — never wipe local with empty Sheets
+        if((data.tasks||[]).length===0&&S.tasks.length>0)return;
+        // Snapshot before to detect real changes
+        const prevT=S.tasks.map(t=>t.id+t.status).sort().join(',');
+        const prevE=S.events.filter(e=>!e.recurId).map(e=>e.id).sort().join(',');
+        hardResetFromSheets(data);
+        const newT=S.tasks.map(t=>t.id+t.status).sort().join(',');
+        const newE=S.events.filter(e=>!e.recurId).map(e=>e.id).sort().join(',');
+        if(prevT!==newT||prevE!==newE){
           saveToLocal();
           render();
-          setSyncStatus('\u2713 Synced '+new Date().toLocaleTimeString(),'ok');
+          setSyncStatus('✓ Synced '+new Date().toLocaleTimeString(),'ok');
         }
-        }
-      }catch(e){}
+      }catch(e){ /* silent — tab switch sync is best-effort */ }
     }
   });
 
