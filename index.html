@@ -722,6 +722,22 @@ async function sheetsSaveRecurRule(r){
   }catch(e){return false;}
 }
 
+async function sheetsSaveEvent(ev){
+  if(!SHEETS_URL)return false;
+  try{
+    const r=await sheetsGet({action:'saveEvent',data:JSON.stringify(ev)},8000);
+    return r&&r.status==='ok';
+  }catch(e){return false;}
+}
+
+async function sheetsDeleteEvent(id){
+  if(!SHEETS_URL)return false;
+  try{
+    const r=await sheetsGet({action:'deleteEvent',id:id},8000);
+    return r&&r.status==='ok';
+  }catch(e){return false;}
+}
+
 async function sheetsDeleteRecurRule(id){
   if(!SHEETS_URL)return false;
   try{
@@ -1550,15 +1566,16 @@ function dropSecReorder(e,targetId){
 }
 function calClick(el){S.calModal={date:el.dataset.date,hour:parseInt(el.dataset.hour)};render();}
 function delEv(id){
-  // If this event is linked to a task, also remove that task
   const ev=S.events.find(e=>e.id===id);
   if(ev&&ev.taskId){
     S.tasks=S.tasks.filter(t=>t.id!==ev.taskId);
-    sheetsDelete('deleteTask',ev.taskId);
+    sheetsDeleteTask(ev.taskId);
   }
   S.events=S.events.filter(e=>e.id!==id);
-  sheetsDelete('deleteEvent',id);
-  save();
+  saveToLocal();
+  sheetsDeleteEvent(id).then(ok=>{
+    if(!ok){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,3000); }
+  });
   render();
 }
 function prevW(){S.weekOffset--;render();}function nextW(){S.weekOffset++;render();}
@@ -1621,11 +1638,16 @@ function clearAllArchive(){
   render();
 }
 function delTask(id){
+  const evIds=S.events.filter(e=>e.taskId===id).map(e=>e.id);
   S.tasks=S.tasks.filter(t=>t.id!==id);
   S.events=S.events.filter(e=>e.taskId!==id);
   saveToLocal();
-  sheetsDeleteTask(id).then(ok=>{
-    setSyncStatus(ok?'✓ Saved '+new Date().toLocaleTimeString():'⚠ Delete failed','ok');
+  Promise.all([
+    sheetsDeleteTask(id),
+    ...evIds.map(eid=>sheetsDeleteEvent(eid))
+  ]).then(results=>{
+    const ok=results.every(Boolean);
+    setSyncStatus(ok?'✓ Saved '+new Date().toLocaleTimeString():'⚠ Delete failed',ok?'ok':'err');
     if(!ok){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,3000); }
   });
   render();
@@ -1653,24 +1675,37 @@ function saveTask(){
     if(t){
       Object.assign(t,{name,secId,status,due,notes});
       const ev=S.events.find(e=>e.taskId===t.id);
-      if(ev&&due){ev.title=name;ev.cat=cat;ev.date=due;ev.note=notes.slice(0,60);}
+      let evToSave=null;
+      if(due){
+        if(ev){ev.title=name;ev.cat=cat;ev.date=due;ev.note=notes.slice(0,60);evToSave=ev;}
+        else{evToSave={id:'e'+Date.now(),taskId:t.id,title:name,cat,date:due,hour:hr,note:notes.slice(0,60)};S.events.push(evToSave);}
+      }
       saveToLocal();
-      sheetsSaveTask(t).then(ok=>{
-        setSyncStatus(ok?'✓ Saved '+new Date().toLocaleTimeString():'⚠ Save failed — check connection',ok?'ok':'err');
+      Promise.all([
+        sheetsSaveTask(t),
+        evToSave?sheetsSaveEvent(evToSave):Promise.resolve(true)
+      ]).then(([taskOk,evOk])=>{
+        setSyncStatus((taskOk&&evOk)?'✓ Saved '+new Date().toLocaleTimeString():'⚠ Save failed',(taskOk&&evOk)?'ok':'err');
       });
     }
   }else{
     const id='t'+Date.now();
     const task={id,name,secId,status,due,notes};
     S.tasks.push(task);
+    let newEv=null;
     if(due){
-      const ev={id:'e'+Date.now(),taskId:id,title:name,cat,date:due,hour:hr,note:notes.slice(0,60)};
-      S.events.push(ev);
+      newEv={id:'e'+Date.now(),taskId:id,title:name,cat,date:due,hour:hr,note:notes.slice(0,60)};
+      S.events.push(newEv);
     }
     saveToLocal();
     setSyncStatus('Saving…');
-    sheetsSaveTask(task).then(ok=>{
-      setSyncStatus(ok?'✓ Saved '+new Date().toLocaleTimeString():'⚠ Save failed — retrying','ok');
+    // Save task AND event in parallel
+    Promise.all([
+      sheetsSaveTask(task),
+      newEv?sheetsSaveEvent(newEv):Promise.resolve(true)
+    ]).then(([taskOk,evOk])=>{
+      const ok=taskOk&&evOk;
+      setSyncStatus(ok?'✓ Saved '+new Date().toLocaleTimeString():'⚠ Save failed — retrying',ok?'ok':'err');
       if(!ok){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,3000); }
     });
   }
@@ -1680,7 +1715,11 @@ function saveCalEv(){
   const title=(document.getElementById('ce-title').value||'').trim();if(!title)return;
   const ev={id:'e'+Date.now(),title,cat:document.getElementById('ce-cat').value,date:document.getElementById('ce-date').value,hour:parseInt(document.getElementById('ce-hr').value),note:document.getElementById('ce-note').value};
   S.events.push(ev);
-  save();
+  saveToLocal();
+  sheetsSaveEvent(ev).then(ok=>{
+    setSyncStatus(ok?'✓ Saved '+new Date().toLocaleTimeString():'⚠ Save failed',ok?'ok':'err');
+    if(!ok){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,3000); }
+  });
   S.calModal=null;render();
 }
 function openEditRecur(id){
@@ -1816,12 +1855,17 @@ function saveAddToPlanner(idx){
   const id='t'+Date.now();
   const task={id,name,secId,status,due,notes,clientIdx:idx};
   S.tasks.push(task);
+  let atpEv=null;
   if(due){
-    const ev={id:'e'+Date.now(),taskId:id,title:name,cat,date:due,hour:hr,note:notes.slice(0,60)};
-    S.events.push(ev);
+    atpEv={id:'e'+Date.now(),taskId:id,title:name,cat,date:due,hour:hr,note:notes.slice(0,60)};
+    S.events.push(atpEv);
   }
   saveToLocal();
-  sheetsSaveTask(task).then(ok=>{
+  Promise.all([
+    sheetsSaveTask(task),
+    atpEv?sheetsSaveEvent(atpEv):Promise.resolve(true)
+  ]).then(([tok,eok])=>{
+    const ok=tok&&eok;
     setSyncStatus(ok?'✓ Saved '+new Date().toLocaleTimeString():'⚠ Save failed',ok?'ok':'err');
     if(!ok){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,3000); }
   });
@@ -1864,13 +1908,17 @@ function saveNote(idx){
   const taskId='t'+Date.now();
   const task={id:taskId,name:c.company,secId:sec.id,status:'normal',due:date,notes:text.slice(0,120),clientIdx:idx};
   S.tasks.push(task);
+  let noteEv=null;
   if(date){
-    const ev={id:'ev'+Date.now(),taskId:taskId,title:c.company,cat:sec.cat||'Reach Out',date,hour:9,note:text.slice(0,60)};
-    S.events.push(ev);
+    noteEv={id:'ev'+Date.now(),taskId:taskId,title:c.company,cat:sec.cat||'Reach Out',date,hour:9,note:text.slice(0,60)};
+    S.events.push(noteEv);
   }
   saveToLocal();
-  sheetsSaveTask(task).then(ok=>{
-    if(!ok){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,3000); }
+  Promise.all([
+    sheetsSaveTask(task),
+    noteEv?sheetsSaveEvent(noteEv):Promise.resolve(true)
+  ]).then(([tok,eok])=>{
+    if(!(tok&&eok)){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,3000); }
   });
   render();
 }
