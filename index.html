@@ -1103,15 +1103,33 @@ function renderCard(t){
   const od=t.due&&t.due<todayStr();
   return `<div class="tcard" draggable="true" ondragstart="dragStart(event,'${t.id}')" onclick="openEdit('${t.id}')">
     <button class="del-tc" onclick="event.stopPropagation();delTask('${t.id}')">✕</button>
-    <div class="tcard-title">${t.name}</div>
+    <div class="tcard-title">${t.name}${t.clientIdx!==undefined&&t.clientIdx!==null?` <span onclick="event.stopPropagation();goToClient(${t.clientIdx})" style="font-size:10px;color:#1e3a8a;background:#e0f2fe;padding:1px 6px;border-radius:4px;cursor:pointer;font-weight:600;vertical-align:middle">🏢 Client</span>`:''}</div>
     ${t.notes?`<div class="tcard-notes">${t.notes.slice(0,90)}${t.notes.length>90?'…':''}</div>`:''}
     <div class="tcard-meta">
       <span class="badge b-${t.status||'normal'}">${t.status||'normal'}</span>
       ${t.due?`<span class="${od?'b-overdue':'b-due'}">${od?'⚠ ':''}`+t.due+`</span>`:''}
-      <button class="done-btn" onclick="event.stopPropagation();archiveTask('${t.id}')">✓ Done</button>
+      <button class="done-btn" onclick="event.stopPropagation();markTaskDone('${t.id}')" style="background:#bbf7d0;color:#14532d;font-weight:700">✓ Done</button>
       <button class="gcal-btn" onclick="event.stopPropagation();gcalTask('${t.id}')">GCal</button>
     </div>
   </div>`;
+}
+
+// Mark done: archive task but keep calendar event (greyed out)
+function markTaskDone(id){
+  const t=S.tasks.find(x=>x.id===id);if(!t)return;
+  const archived=JSON.parse(JSON.stringify({...t,archivedAt:new Date().toISOString()}));
+  S.archived.push(archived);
+  S.tasks=S.tasks.filter(x=>x.id!==id);
+  // Mark linked calendar events as done (don't delete them)
+  S.events.forEach(e=>{if(e.taskId===id)e.done=true;});
+  saveToLocal();
+  Promise.all([
+    sheetsArchiveTask(archived),
+    sheetsDeleteTask(id,'task')
+  ]).then(()=>{});
+  // Save updated events (with done flag) 
+  S.events.filter(e=>e.taskId===id).forEach(e=>sheetsSaveEvent(e));
+  render();
 }
 
 function renderWeek(days,small){
@@ -1124,7 +1142,18 @@ function renderWeek(days,small){
     days.forEach(d=>{
       const ds=fmtDate(d),isT=ds===today;
       const evs=S.events.filter(e=>e.date===ds&&e.hour===hr);
-      let inner=evs.map(ev=>`<div class="ev ${evClass(ev.cat||'Other')}"><div class="ev-row"><span class="ev-txt">${ev.title}</span><button class="ev-del" onclick="event.stopPropagation();delEv('${ev.id}')">×</button></div>${ev.note&&!small?`<div class="ev-note">${ev.note.slice(0,44)}</div>`:''}</div>`).join('');
+      let inner=evs.map(ev=>{
+        const isDone=ev.done||false;
+        const doneStyle=isDone?'opacity:.45;text-decoration:line-through;':'';
+        const doneTitle=isDone?' (done)':'';
+        return `<div class="ev ${evClass(ev.cat||'Other')}" style="${doneStyle}" onclick="event.stopPropagation();${ev.taskId?`openCalEventEdit('${ev.id}')`:`openCalEventEdit('${ev.id}')`}">
+          <div class="ev-row">
+            <span class="ev-txt">${(isDone?'✓ ':'')+ev.title+doneTitle}</span>
+            <button class="ev-del" onclick="event.stopPropagation();delEv('${ev.id}')">×</button>
+          </div>
+          ${ev.note&&!small?`<div class="ev-note">${ev.note.slice(0,44)}</div>`:''}
+        </div>`;
+      }).join('');
       h+=`<div class="cc${isT?' tday-col':''}" data-date="${ds}" data-hour="${hr}" onclick="calClick(this)">${inner}</div>`;
     });
   });
@@ -1369,19 +1398,21 @@ function buildTaskModal(){
 
 function buildCalModal(){
   const cm=S.calModal;
-  const catOpts=S.sections.map(s=>`<option value="${s.cat||s.name}">${s.name}</option>`).join('');
+  const editing=cm.editEvId?S.events.find(e=>e.id===cm.editEvId):null;
+  const catOpts=S.sections.map(s=>`<option value="${s.cat||s.name}"${editing&&editing.cat===(s.cat||s.name)?' selected':''}>${s.name}</option>`).join('');
   return `<div class="mbox" onclick="event.stopPropagation()">
-    <h3>📅 Add calendar block</h3>
-    <div class="mfield"><label>Title</label><input id="ce-title" placeholder="e.g. Follow up – Green Knight"/></div>
+    <h3>${editing?'✎ Edit calendar block':'📅 Add calendar block'}</h3>
+    <div class="mfield"><label>Title</label><input id="ce-title" value="${editing?editing.title.replace(/"/g,'&quot;'):''}" placeholder="e.g. Follow up – Green Knight"/></div>
     <div class="mrow">
       <div class="mfield"><label>Category</label><select id="ce-cat">${catOpts}</select></div>
-      <div class="mfield"><label>Time</label><select id="ce-hr">${HOURS.map((h,i)=>`<option value="${h}"${h===cm.hour?' selected':''}>${HLBL[i]}</option>`).join('')}</select></div>
+      <div class="mfield"><label>Time</label><select id="ce-hr">${HOURS.map((h,i)=>`<option value="${h}"${h===(editing?editing.hour:cm.hour)?' selected':''}>${HLBL[i]}</option>`).join('')}</select></div>
     </div>
-    <div class="mfield"><label>Date</label><input id="ce-date" type="date" value="${cm.date}"/></div>
-    <div class="mfield"><label>Note (shows on calendar)</label><input id="ce-note" placeholder="Brief detail..."/></div>
+    <div class="mfield"><label>Date</label><input id="ce-date" type="date" value="${editing?editing.date:cm.date}"/></div>
+    <div class="mfield"><label>Note</label><input id="ce-note" value="${editing&&editing.note?editing.note.replace(/"/g,'&quot;'):''}" placeholder="Brief detail..."/></div>
     <div class="modal-btns">
       <button class="btn" onclick="closeAllModals()">Cancel</button>
-      <button class="btn primary" onclick="saveCalEv()">💾 Save</button>
+      ${editing?`<button class="btn" style="color:#991b1b;border-color:#fca5a5" onclick="delEv('${editing.id}');closeAllModals()">🗑 Delete</button>`:''}
+      <button class="btn primary" onclick="saveCalEv()">💾 ${editing?'Update':'Save'}</button>
     </div>
   </div>`;
 }
@@ -1570,7 +1601,16 @@ function dropSecReorder(e,targetId){
   saveSectionsNow();
   render();
 }
-function calClick(el){S.calModal={date:el.dataset.date,hour:parseInt(el.dataset.hour)};render();}
+function calClick(el){
+  S.calModal={date:el.dataset.date,hour:parseInt(el.dataset.hour)};
+  render();
+}
+function openCalEventEdit(evId){
+  const ev=S.events.find(e=>e.id===evId);if(!ev)return;
+  if(ev.taskId&&!ev.done){openEdit(ev.taskId);return;}
+  S.calModal={date:ev.date,hour:ev.hour,editEvId:ev.id};
+  render();
+}
 function delEv(id){
   const ev=S.events.find(e=>e.id===id);
   if(ev&&ev.taskId){
@@ -1668,6 +1708,16 @@ function addSec(){
   S.sections.push({id:'s'+Date.now(),name:n.trim(),style:'s-custom',cat:n.trim()});
   saveSectionsNow();render();
 }
+function goToClient(idx){
+  S.tab='clients';
+  S.selClient=idx;
+  render();
+  // Scroll client into view
+  setTimeout(()=>{
+    const el=document.querySelector('.crow.sel');
+    if(el)el.scrollIntoView({behavior:'smooth',block:'nearest'});
+  },100);
+}
 function gcalTask(id){const t=S.tasks.find(x=>x.id===id);if(!t)return;const d=(t.due||todayStr()).replace(/-/g,'');window.open(`https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(t.name)}&dates=${d}/${d}&details=${encodeURIComponent(t.notes||'')}`);}
 
 function saveTask(){
@@ -1719,10 +1769,22 @@ function saveTask(){
 }
 function saveCalEv(){
   const title=(document.getElementById('ce-title').value||'').trim();if(!title)return;
-  const ev={id:'e'+Date.now(),title,cat:document.getElementById('ce-cat').value,date:document.getElementById('ce-date').value,hour:parseInt(document.getElementById('ce-hr').value),note:document.getElementById('ce-note').value};
-  S.events.push(ev);
+  const cat=document.getElementById('ce-cat').value;
+  const date=document.getElementById('ce-date').value;
+  const hour=parseInt(document.getElementById('ce-hr').value);
+  const note=document.getElementById('ce-note').value;
+  const editEvId=S.calModal&&S.calModal.editEvId;
+  let evToSave;
+  if(editEvId){
+    evToSave=S.events.find(e=>e.id===editEvId);
+    if(evToSave)Object.assign(evToSave,{title,cat,date,hour,note});
+  } else {
+    evToSave={id:'e'+Date.now(),title,cat,date,hour,note};
+    S.events.push(evToSave);
+  }
+  if(!evToSave)return;
   saveToLocal();
-  sheetsSaveEvent(ev).then(ok=>{
+  sheetsSaveEvent(evToSave).then(ok=>{
     setSyncStatus(ok?'✓ Saved '+new Date().toLocaleTimeString():'⚠ Save failed',ok?'ok':'err');
     if(!ok){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,3000); }
   });
@@ -2127,7 +2189,8 @@ function importCSV(e){
     function findCol(field){const aliases=map[field]||[field];for(const a of aliases){const i=headers.findIndex(h=>h.includes(a));if(i>=0)return i;}return -1;}
     const cols={};Object.keys(map).forEach(k=>{cols[k]=findCol(k);});
     
-    let added=0,updated=0,duplicates=[];
+    const newClients=[];let updated=0;
+    const duplicateReview=[];
     for(let i=1;i<lines.length;i++){
       // Handle quoted CSV values
       const row=[];let cur='',inQ=false;
@@ -2154,26 +2217,83 @@ function importCSV(e){
         // Check fuzzy match before adding
         const similar=S.clients.find(c=>fuzzyMatch(company.toLowerCase(),c.company.toLowerCase()));
         if(similar){
-          duplicates.push(company+' (similar to: '+similar.company+')');
+          duplicateReview.push({incoming:newClient,existing:similar,existingIdx:S.clients.indexOf(similar)});
         } else {
-          S.clients.push(newClient);
-        save();
-        added++;
+          newClients.push(newClient);
         }
       }
     }
-    /* auto-synced */;render();
-    setSyncStatus('✓ CSV: +'+added+' new, '+updated+' updated'+(duplicates.length?' | '+duplicates.length+' skipped':''),'ok');
-    let msg='';
-    if(added||updated) msg+='✓ '+added+' new companies added, '+updated+' existing updated.\n';
-    if(duplicates.length) msg+='\n⚠️ '+duplicates.length+' skipped (possible duplicates):\n'+duplicates.slice(0,10).join('\n');
-    if(msg) alert(msg);
-    else if(!added&&!updated) alert('No companies imported. Make sure your CSV has a "Company" or "Name" column header.\n\nExample columns:\nCompany, Contact, Phone, Email, Website, Address, Stage, Focus, Size');
+    S.clients.push(...newClients);
+    save();render();
+    if(duplicateReview.length){
+      showDuplicateReview(duplicateReview,newClients.length,updated);
+    } else if(!newClients.length&&!updated){
+      alert('No companies imported. Make sure your CSV has a "Company" or "Name" column header.');
+    } else {
+      setSyncStatus('✓ CSV: +'+newClients.length+' added, '+updated+' updated','ok');
+    }
   };
   reader.readAsText(file);
   e.target.value=''; // reset so same file can be re-imported
 }
 
+function showDuplicateReview(dupes, added, updated){
+  const existing=document.getElementById('dupReviewModal');if(existing)existing.remove();
+  const div=document.createElement('div');div.id='dupReviewModal';
+  div.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:400;display:flex;align-items:center;justify-content:center;padding:16px';
+  const rows=dupes.map((d,i)=>`
+    <div style="border:1.5px solid #fbbf24;border-radius:8px;padding:12px 14px;margin-bottom:8px;background:#fffbeb">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:700;color:#92400e">⚠ Incoming: ${d.incoming.company}</div>
+          <div style="font-size:11px;color:#64748b;margin-top:2px">Similar to existing: <strong>${d.existing.company}</strong></div>
+          ${d.incoming.phone?`<div style="font-size:11px;color:#64748b">📞 ${d.incoming.phone}</div>`:''}
+          ${d.incoming.email?`<div style="font-size:11px;color:#64748b">✉ ${d.incoming.email}</div>`:''}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:5px;flex-shrink:0">
+          <button onclick="addDupeAnyway(${i})" style="font-size:11px;padding:4px 10px;background:#1e3a8a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700">+ Add anyway</button>
+          <button onclick="skipDupe(${i})" style="font-size:11px;padding:4px 10px;background:#e5e7eb;color:#374151;border:none;border-radius:6px;cursor:pointer">Skip</button>
+          <button onclick="viewExisting(${d.existingIdx})" style="font-size:11px;padding:4px 10px;background:#f0f4ff;color:#1e3a8a;border:1px solid #bfdbfe;border-radius:6px;cursor:pointer">View existing</button>
+        </div>
+      </div>
+    </div>`).join('');
+  div.innerHTML=`<div style="background:#fff;border-radius:14px;padding:22px;width:520px;max-height:80vh;overflow-y:auto;box-shadow:0 10px 40px rgba(0,0,0,.2)">
+    <h3 style="font-size:16px;font-weight:700;margin-bottom:6px;color:#111">📋 CSV Import — Possible Duplicates</h3>
+    <p style="font-size:12px;color:#64748b;margin-bottom:14px">Added <strong>${added}</strong> new + updated <strong>${updated}</strong> existing. Review these <strong>${dupes.length}</strong> possible duplicates:</p>
+    <div id="dupe-rows">${rows}</div>
+    <div style="border-top:1px solid #e2e8f0;margin-top:14px;padding-top:12px;display:flex;gap:8px;justify-content:flex-end">
+      <button onclick="addAllDupes()" style="font-size:12px;padding:6px 14px;background:#f59e0b;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:700">+ Add all anyway</button>
+      <button onclick="document.getElementById('dupReviewModal').remove()" style="font-size:12px;padding:6px 14px;background:#1e3a8a;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:700">Done</button>
+    </div>
+  </div>`;
+  document.body.appendChild(div);
+  // Store dupes on window for button handlers
+  window._pendingDupes=dupes;
+}
+function addDupeAnyway(i){
+  const d=window._pendingDupes[i];if(!d||d._skipped)return;
+  S.clients.push(d.incoming);save();render();
+  d._skipped=true;
+  const row=document.querySelectorAll('#dupe-rows>div')[i];
+  if(row)row.style.opacity='.4';
+  setSyncStatus('✓ Added '+d.incoming.company,'ok');
+}
+function skipDupe(i){
+  const d=window._pendingDupes[i];if(!d)return;
+  d._skipped=true;
+  const row=document.querySelectorAll('#dupe-rows>div')[i];
+  if(row){row.style.opacity='.3';row.style.textDecoration='line-through';}
+}
+function addAllDupes(){
+  (window._pendingDupes||[]).forEach(d=>{if(!d._skipped){S.clients.push(d.incoming);}});
+  save();render();
+  document.getElementById('dupReviewModal').remove();
+  setSyncStatus('✓ All duplicates added','ok');
+}
+function viewExisting(idx){
+  document.getElementById('dupReviewModal').remove();
+  S.tab='clients';S.selClient=idx;render();
+}
 function showEmailSetup(){
   // Remove any existing overlays
   document.querySelectorAll('.moverlay').forEach(el=>el.remove());
