@@ -191,6 +191,7 @@ html,body{height:100%;overflow:hidden;background:#f1f5f9}
       <button class="btn" style="font-size:11px;padding:4px 10px" onclick="showEmailSetup()" title="Set up daily email reminders">📧 Email setup</button>
       <button class="btn" style="font-size:11px;padding:4px 10px" onclick="diagnoseSheetsURL()" title="Test Apps Script connection">🔍 Test</button>
       <button class="btn" style="font-size:11px;padding:4px 10px" onclick="reloadFromSheets()" title="Reload latest data from Sheets">🔄 Reload</button>
+      <button class="btn" style="font-size:11px;padding:4px 10px;color:#065f46;border-color:#6ee7b7" onclick="fixCalendarEvents()" title="Recreate missing calendar events for tasks with due dates">🗓 Fix Calendar</button>
     </div>
   </div>
   <div id="tab-content" style="flex:1;overflow:hidden;display:flex;flex-direction:column"></div>
@@ -629,17 +630,32 @@ function repairMissingEvents(){
     if(t.due&&!taskIdsWithEvents.has(t.id)){
       const sec=S.sections.find(s=>s.id===t.secId);
       const cat=sec?sec.cat||sec.name:'Other';
-      const ev={id:'e'+Date.now()+Math.random().toString(36).slice(2),
+      // Use unique timestamp + index to avoid ID collisions
+      const ev={id:'e'+(Date.now()+repaired.length).toString(36)+Math.random().toString(36).slice(2,6),
         taskId:t.id,title:t.name,cat,date:t.due,hour:9,
         note:(t.notes||'').slice(0,60)};
       S.events.push(ev);
       repaired.push(ev);
+      console.log('Repaired event for:',t.name,'due:',t.due);
     }
   });
-  if(repaired.length&&SHEETS_URL){
-    repaired.forEach(ev=>sheetsSaveEvent(ev).catch(()=>{}));
-    console.log('Repaired '+repaired.length+' missing calendar events');
+  if(repaired.length){
+    setSyncStatus('Fixing '+repaired.length+' calendar event(s)…');
+    if(SHEETS_URL){
+      Promise.all(repaired.map(ev=>sheetsSaveEvent(ev))).then(results=>{
+        const saved=results.filter(Boolean).length;
+        setSyncStatus('✓ Fixed '+saved+' calendar event(s)','ok');
+        render(); // re-render to show repaired events
+      });
+    } else {
+      render();
+    }
   }
+}
+
+// Manual trigger — call from browser console or add a button
+function fixCalendarEvents(){
+  repairMissingEvents();
 }
 
 
