@@ -1129,18 +1129,25 @@ function renderCard(t){
 // Mark done: archive task but keep calendar event (greyed out)
 function markTaskDone(id){
   const t=S.tasks.find(x=>x.id===id);if(!t)return;
+  // Prevent double-archive if already in archived
+  if(S.archived.find(x=>x.id===id))return;
   const archived=JSON.parse(JSON.stringify({...t,archivedAt:new Date().toISOString()}));
   S.archived.push(archived);
   S.tasks=S.tasks.filter(x=>x.id!==id);
-  // Mark linked calendar events as done (don't delete them)
   S.events.forEach(e=>{if(e.taskId===id)e.done=true;});
   saveToLocal();
+  // Block poll until archive operation confirmed in Sheets
+  _pendingSave=true;
+  setSyncStatus('Saving…');
+  const evSaves=S.events.filter(e=>e.taskId===id).map(e=>sheetsSaveEvent(e));
   Promise.all([
     sheetsArchiveTask(archived),
-    sheetsDeleteTask(id,'task')
-  ]).then(()=>{});
-  // Save updated events (with done flag) 
-  S.events.filter(e=>e.taskId===id).forEach(e=>sheetsSaveEvent(e));
+    ...evSaves
+  ]).then(results=>{
+    const ok=results.every(r=>r!==false);
+    _pendingSave=false;
+    setSyncStatus(ok?'✓ Done '+new Date().toLocaleTimeString():'⚠ Save failed',ok?'ok':'err');
+  }).catch(()=>{ _pendingSave=false; });
   render();
 }
 
@@ -1723,23 +1730,26 @@ function addSec(){
   saveSectionsNow();render();
 }
 function undoTaskDone(taskId){
-  // Find in archived
   const a=S.archived.find(x=>x.id===taskId);
   if(!a)return;
-  // Move back to tasks
   const{archivedAt,...t}=a;
   S.tasks.push(t);
   S.archived=S.archived.filter(x=>x.id!==taskId);
-  // Un-grey the calendar event
   S.events.forEach(e=>{ if(e.taskId===taskId) delete e.done; });
   saveToLocal();
+  // Block poll until all Sheets operations complete
+  _pendingSave=true;
+  setSyncStatus('Restoring…');
   Promise.all([
     sheetsSaveTask(t),
     sheetsDeleteTask(taskId,'archived'),
     ...S.events.filter(e=>e.taskId===taskId).map(e=>sheetsSaveEvent(e))
-  ]).then(()=>{});
+  ]).then(results=>{
+    const ok=results.every(r=>r!==false);
+    _pendingSave=false;
+    setSyncStatus(ok?'↩ Task restored '+new Date().toLocaleTimeString():'⚠ Restore failed',ok?'ok':'err');
+  }).catch(()=>{ _pendingSave=false; });
   render();
-  setSyncStatus('↩ Task restored','ok');
 }
 function goToClient(idx){
   S.tab='clients';
