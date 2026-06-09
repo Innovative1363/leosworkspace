@@ -618,7 +618,30 @@ function mergeFromSheets(data){
     });
     S.clients=Object.values(baseMap);
   }
+  // Repair: recreate calendar events for tasks with due dates but no event
+  repairMissingEvents();
 }
+
+function repairMissingEvents(){
+  const taskIdsWithEvents=new Set(S.events.filter(e=>e.taskId).map(e=>e.taskId));
+  const repaired=[];
+  S.tasks.forEach(t=>{
+    if(t.due&&!taskIdsWithEvents.has(t.id)){
+      const sec=S.sections.find(s=>s.id===t.secId);
+      const cat=sec?sec.cat||sec.name:'Other';
+      const ev={id:'e'+Date.now()+Math.random().toString(36).slice(2),
+        taskId:t.id,title:t.name,cat,date:t.due,hour:9,
+        note:(t.notes||'').slice(0,60)};
+      S.events.push(ev);
+      repaired.push(ev);
+    }
+  });
+  if(repaired.length&&SHEETS_URL){
+    repaired.forEach(ev=>sheetsSaveEvent(ev).catch(()=>{}));
+    console.log('Repaired '+repaired.length+' missing calendar events');
+  }
+}
+
 
 // ── SAVE — instant to localStorage, debounced sync to Sheets ─────────────────
 function save(op){
