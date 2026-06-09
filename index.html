@@ -816,11 +816,22 @@ function hardResetFromSheets(data){
     }
   }
   if(data.tasks){
+    // Build a map of local task clientIdx values before reset (they're not in Sheets)
+    const localClientMap={};
+    S.tasks.forEach(t=>{ if(t.clientIdx!=null) localClientMap[t.id]=t.clientIdx; });
     S.tasks=data.tasks.map(t=>({
       id:String(t['ID']||t.id||''),name:String(t['Name']||t.name||''),
       secId:String(t['Section ID']||t.secId||''),status:String(t['Status']||t.status||'normal'),
       due:String(t['Due Date']||t.due||''),notes:String(t['Notes']||t.notes||'')
-    })).filter(t=>t.id&&t.name);
+    })).filter(t=>t.id&&t.name).map(t=>{
+      // Restore clientIdx from local map, or match by company name
+      if(localClientMap[t.id]!=null) t.clientIdx=localClientMap[t.id];
+      else{
+        const ci=S.clients?S.clients.findIndex(c=>c.company===t.name):-1;
+        if(ci>=0) t.clientIdx=ci;
+      }
+      return t;
+    });
   }
   if(data.archived){
     S.archived=data.archived.map(a=>({
@@ -1412,6 +1423,7 @@ function buildCalModal(){
     <div class="modal-btns">
       <button class="btn" onclick="closeAllModals()">Cancel</button>
       ${editing?`<button class="btn" style="color:#991b1b;border-color:#fca5a5" onclick="delEv('${editing.id}');closeAllModals()">🗑 Delete</button>`:''}
+      ${editing&&editing.done&&editing.taskId?`<button class="btn" style="color:#065f46;border-color:#6ee7b7;background:#f0fdf4" onclick="undoTaskDone('${editing.taskId}');closeAllModals()">↩ Undo Done</button>`:''}
       <button class="btn primary" onclick="saveCalEv()">💾 ${editing?'Update':'Save'}</button>
     </div>
   </div>`;
@@ -1707,6 +1719,25 @@ function addSec(){
   const n=prompt('New section name:');if(!n)return;
   S.sections.push({id:'s'+Date.now(),name:n.trim(),style:'s-custom',cat:n.trim()});
   saveSectionsNow();render();
+}
+function undoTaskDone(taskId){
+  // Find in archived
+  const a=S.archived.find(x=>x.id===taskId);
+  if(!a)return;
+  // Move back to tasks
+  const{archivedAt,...t}=a;
+  S.tasks.push(t);
+  S.archived=S.archived.filter(x=>x.id!==taskId);
+  // Un-grey the calendar event
+  S.events.forEach(e=>{ if(e.taskId===taskId) delete e.done; });
+  saveToLocal();
+  Promise.all([
+    sheetsSaveTask(t),
+    sheetsDeleteTask(taskId,'archived'),
+    ...S.events.filter(e=>e.taskId===taskId).map(e=>sheetsSaveEvent(e))
+  ]).then(()=>{});
+  render();
+  setSyncStatus('↩ Task restored','ok');
 }
 function goToClient(idx){
   S.tab='clients';
