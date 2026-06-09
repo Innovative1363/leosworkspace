@@ -984,6 +984,7 @@ function render(){
   if(S.emailModal)appendModal(buildEmailModal());
   if(S.quoteModal)appendModal(buildQuoteModal());
   if(S.scheduleModal)appendModal(buildScheduleModal());
+  if(S.editClientModal)appendModal(buildEditClientModal());
   setTimeout(()=>{
     bindLiveInputs();
     // Wire quote line total calculator
@@ -1273,6 +1274,7 @@ function renderClients(){
         <div class="cd-name">${sel.company}</div>
         ${sel.stage?`<span class="stage-pill ${stageClass(sel.stage)}" style="font-size:12px;padding:3px 10px">${sel.stage}</span>`:''}
         <div class="cd-actions">
+          <button class="cd-task-btn" style="background:#475569" onclick="openEditClient(${idx})">✎ Edit Info</button>
           <button class="cd-task-btn green" onclick="S.addToPlannerModal={clientIdx:${idx}};render()">📅 Add to Planner</button>
           <button class="cd-task-btn" style="background:#0369a1" onclick="S.emailModal={clientIdx:${idx}};render()">✉ Send Email</button>
           <button class="cd-task-btn" style="background:#7c3aed" onclick="S.quoteModal={clientIdx:${idx}};render()">📄 Quote / Invoice</button>
@@ -1377,7 +1379,7 @@ function appendModal(html){
   setTimeout(()=>{const f=div.querySelector('input,textarea');if(f)f.focus();},40);
 }
 function closeAllModals(){
-  S.modal=S.calModal=S.recurModal=S.addClientModal=S.addToPlannerModal=S.emailModal=S.quoteModal=S.scheduleModal=null;
+  S.modal=S.calModal=S.recurModal=S.addClientModal=S.addToPlannerModal=S.emailModal=S.quoteModal=S.scheduleModal=S.editClientModal=null;
   S.editRecurId=null;
   document.querySelectorAll('.moverlay').forEach(el=>el.remove());
   render();
@@ -2325,6 +2327,90 @@ function viewExisting(idx){
   document.getElementById('dupReviewModal').remove();
   S.tab='clients';S.selClient=idx;render();
 }
+function openEditClient(idx){
+  S.editClientModal={clientIdx:idx};
+  render();
+}
+
+function buildEditClientModal(){
+  const m=S.editClientModal;
+  const c=S.clients[m.clientIdx];
+  return `<div class="mbox" onclick="event.stopPropagation()" style="width:500px">
+    <h3>✎ Edit Client Info — ${c.company}</h3>
+    <div class="mrow">
+      <div class="mfield"><label>Company name</label>
+        <input id="ec-company" value="${(c.company||'').replace(/"/g,'&quot;')}"/>
+      </div>
+      <div class="mfield"><label>Stage</label>
+        <select id="ec-stage">
+          <option value="">— none —</option>
+          ${STAGES.map(s=>`<option value="${s}"${c.stage===s?' selected':''}>${s}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="mrow">
+      <div class="mfield"><label>Contact name</label>
+        <input id="ec-contact" value="${(c.contact||'').replace(/"/g,'&quot;')}"/>
+      </div>
+      <div class="mfield"><label>Phone</label>
+        <input id="ec-phone" value="${(c.phone||'').replace(/"/g,'&quot;')}"/>
+      </div>
+    </div>
+    <div class="mfield"><label>Email</label>
+      <input id="ec-email" value="${(c.email||'').replace(/"/g,'&quot;')}" placeholder="contact@company.com"/>
+    </div>
+    <div class="mfield"><label>Website</label>
+      <input id="ec-website" value="${(c.website||'').replace(/"/g,'&quot;')}" placeholder="https://..."/>
+    </div>
+    <div class="mfield"><label>Address</label>
+      <input id="ec-address" value="${(c.address||'').replace(/"/g,'&quot;')}" placeholder="City, State"/>
+    </div>
+    <div class="mrow">
+      <div class="mfield"><label>Size</label>
+        <input id="ec-size" value="${(c.size||'').replace(/"/g,'&quot;')}" placeholder="e.g. 50+ guards"/>
+      </div>
+      <div class="mfield"><label>Focus / Services</label>
+        <input id="ec-focus" value="${(c.focus||'').replace(/"/g,'&quot;')}" placeholder="e.g. Corporate, retail"/>
+      </div>
+    </div>
+    <div class="modal-btns">
+      <button class="btn" onclick="closeAllModals()">Cancel</button>
+      <button class="btn primary" onclick="saveEditClient(${m.clientIdx})">💾 Save changes</button>
+    </div>
+  </div>`;
+}
+
+function saveEditClient(idx){
+  const c=S.clients[idx];
+  const newCompany=(document.getElementById('ec-company').value||'').trim();
+  if(!newCompany){alert('Company name is required.');return;}
+  // Update all fields
+  c.company=newCompany;
+  c.stage=document.getElementById('ec-stage').value;
+  c.contact=document.getElementById('ec-contact').value.trim();
+  c.phone=document.getElementById('ec-phone').value.trim();
+  c.email=document.getElementById('ec-email').value.trim();
+  c.website=document.getElementById('ec-website').value.trim();
+  c.address=document.getElementById('ec-address').value.trim();
+  c.size=document.getElementById('ec-size').value.trim();
+  c.focus=document.getElementById('ec-focus').value.trim();
+  // Update any linked tasks that use company name
+  S.tasks.forEach(t=>{ if(t.clientIdx===idx) t.name=newCompany; });
+  saveToLocal();
+  // Save to Sheets via granular client save
+  if(SHEETS_URL){
+    sheetsGet({action:'saveClient',data:JSON.stringify({
+      company:c.company,stage:c.stage,contact:c.contact,
+      phone:c.phone,email:c.email,website:c.website,
+      address:c.address,size:c.size,focus:c.focus
+    })},8000).then(ok=>{
+      setSyncStatus(ok&&ok.status==='ok'?'✓ Saved '+new Date().toLocaleTimeString():'⚠ Save failed',
+        ok&&ok.status==='ok'?'ok':'err');
+    }).catch(()=>setSyncStatus('⚠ Save failed','err'));
+  }
+  closeAllModals();
+}
+
 function showEmailSetup(){
   // Remove any existing overlays
   document.querySelectorAll('.moverlay').forEach(el=>el.remove());
