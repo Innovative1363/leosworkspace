@@ -2374,10 +2374,46 @@ function buildEditClientModal(){
       </div>
     </div>
     <div class="modal-btns">
+      <button class="btn" style="color:#991b1b;border-color:#fca5a5;margin-right:auto" onclick="confirmDeleteClient(${m.clientIdx})">🗑 Delete client</button>
       <button class="btn" onclick="closeAllModals()">Cancel</button>
       <button class="btn primary" onclick="saveEditClient(${m.clientIdx})">💾 Save changes</button>
     </div>
   </div>`;
+}
+
+function confirmDeleteClient(idx){
+  const c=S.clients[idx];
+  if(!c)return;
+  if(!confirm('Delete "'+c.company+'"?\n\nThis will permanently remove this client and all their notes and files.'))return;
+  deleteClient(idx);
+}
+
+function deleteClient(idx){
+  const c=S.clients[idx];
+  if(!c)return;
+  // Remove from local state
+  S.clients.splice(idx,1);
+  // Fix any clientIdx references in tasks
+  S.tasks.forEach(t=>{
+    if(t.clientIdx===idx) delete t.clientIdx;
+    else if(t.clientIdx>idx) t.clientIdx--;
+  });
+  // Update selClient if needed
+  if(S.selClient===idx) S.selClient=null;
+  else if(S.selClient>idx) S.selClient--;
+  saveToLocal();
+  // Sheets: delete the client record
+  if(SHEETS_URL){
+    sheetsGet({action:'saveClient',data:JSON.stringify({
+      company:c.company,_delete:true,
+      stage:'',contact:'',phone:'',email:'',website:'',address:'',size:'',focus:''
+    })},8000).catch(()=>{});
+    // Also remove from Client Notes History and Client Files via bulk save
+    fetch(SHEETS_URL+'?action=save&data='+encodeURIComponent(JSON.stringify({clients:S.clients})),
+      {method:'GET',mode:'no-cors'}).catch(()=>{});
+  }
+  setSyncStatus('✓ '+c.company+' deleted','ok');
+  closeAllModals();
 }
 
 function saveEditClient(idx){
