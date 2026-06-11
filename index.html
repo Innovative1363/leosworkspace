@@ -2038,11 +2038,25 @@ function saveNote(idx){
   const editingEl=document.getElementById('editing-note-idx-'+idx);
   const editingIdx=editingEl&&editingEl.value!==''?parseInt(editingEl.value):-1;
 
+  // Helper to save client info+notes to Sheets
+  const saveClientToSheets=(c)=>{
+    if(!SHEETS_URL)return;
+    sheetsGet({action:'saveClient',data:JSON.stringify({
+      company:c.company,stage:c.stage||'',contact:c.contact||'',
+      phone:c.phone||'',email:c.email||'',website:c.website||'',
+      address:c.address||'',size:c.size||'',focus:c.focus||'',
+      notes:c.notes||[]
+    })},10000).then(r=>{
+      setSyncStatus(r&&r.status==='ok'?'✓ Saved '+new Date().toLocaleTimeString():'⚠ Save failed',
+        r&&r.status==='ok'?'ok':'err');
+    }).catch(()=>setSyncStatus('⚠ Save failed','err'));
+  };
+
   if(editingIdx>=0&&editingIdx<c.notes.length){
-    // Update existing note in place
     c.notes[editingIdx]={date,type,note:text};
     if(stage)c.stage=stage;
-    save();
+    saveToLocal();
+    saveClientToSheets(c);
     render();
     return;
   }
@@ -2051,7 +2065,8 @@ function saveNote(idx){
   const note={date,type,note:text};
   c.notes.push(note);
   if(stage)c.stage=stage;
-  save();
+  saveToLocal();
+  saveClientToSheets(c);
 
   // Add to planner + calendar only for new notes
   const sec=S.sections.find(s=>s.name==='Follow Up')||S.sections.find(s=>s.name==='Reach Out')||S.sections[0];
@@ -2487,7 +2502,8 @@ function saveEditClient(idx){
     sheetsGet({action:'saveClient',data:JSON.stringify({
       company:c.company,stage:c.stage,contact:c.contact,
       phone:c.phone,email:c.email,website:c.website,
-      address:c.address,size:c.size,focus:c.focus
+      address:c.address,size:c.size,focus:c.focus,
+      notes:c.notes||[]
     })},8000).then(ok=>{
       setSyncStatus(ok&&ok.status==='ok'?'✓ Saved '+new Date().toLocaleTimeString():'⚠ Save failed',
         ok&&ok.status==='ok'?'ok':'err');
@@ -2663,7 +2679,13 @@ async function sendClientEmail(idx){
         const c=S.clients[idx];
         if(!c.notes)c.notes=[];
         c.notes.push({date:new Date().toISOString().slice(0,10),type:'Email',note:'Email sent: '+subj});
-        save();
+        saveToLocal();
+        sheetsGet({action:'saveClient',data:JSON.stringify({
+          company:c.company,stage:c.stage||'',contact:c.contact||'',
+          phone:c.phone||'',email:c.email||'',website:c.website||'',
+          address:c.address||'',size:c.size||'',focus:c.focus||'',
+          notes:c.notes||[]
+        })},10000).catch(()=>{});
       }
       closeAllModals();
     } else {
@@ -2874,7 +2896,15 @@ async function saveFollowUpSchedule(idx){
   // Log note
   if(!c.notes)c.notes=[];
   c.notes.push({date:todayStr(),type:'Follow Up',note:'Follow-up scheduled for '+date+' via '+method+(note?': '+note.slice(0,100):'')});
-  save();
+  saveToLocal();
+  if(SHEETS_URL){
+    sheetsGet({action:'saveClient',data:JSON.stringify({
+      company:c.company,stage:c.stage||'',contact:c.contact||'',
+      phone:c.phone||'',email:c.email||'',website:c.website||'',
+      address:c.address||'',size:c.size||'',focus:c.focus||'',
+      notes:c.notes||[]
+    })},10000).catch(()=>{});
+  }
 
   // Send reminder email via Apps Script if requested
   if(sendEmail&&SHEETS_URL){
@@ -2927,7 +2957,15 @@ function deleteNote(clientIdx, noteIdx){
   const n=c.notes[noteIdx];
   if(!confirm('Delete this note? '+n.note.slice(0,60)))return;
   c.notes.splice(noteIdx,1);
-  save();
+  saveToLocal();
+  if(SHEETS_URL){
+    sheetsGet({action:'saveClient',data:JSON.stringify({
+      company:c.company,stage:c.stage||'',contact:c.contact||'',
+      phone:c.phone||'',email:c.email||'',website:c.website||'',
+      address:c.address||'',size:c.size||'',focus:c.focus||'',
+      notes:c.notes||[]
+    })},10000).catch(()=>{});
+  }
   render();
 }
 
