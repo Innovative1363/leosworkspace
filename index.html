@@ -634,6 +634,18 @@ function mergeFromSheets(data){
 }
 
 function repairMissingEvents(){
+  // Cleanup: remove duplicate events pointing at the same task (keep the first)
+  const seenTaskIds=new Set();const dupes=[];
+  S.events=S.events.filter(e=>{
+    if(!e.taskId)return true; // recurring/standalone events untouched
+    if(seenTaskIds.has(e.taskId)){dupes.push(e);return false;}
+    seenTaskIds.add(e.taskId);return true;
+  });
+  if(dupes.length){
+    console.log('Removing',dupes.length,'duplicate event(s):',dupes.map(d=>d.title));
+    saveToLocal();
+    if(SHEETS_URL)dupes.forEach(d=>sheetsDeleteEvent(d.id));
+  }
   const taskIdsWithEvents=new Set(S.events.filter(e=>e.taskId).map(e=>e.taskId));
   const repaired=[];
   S.tasks.forEach(t=>{
@@ -1361,25 +1373,66 @@ function renderClients(){
         </div>
         <div class="notes-section">
           <div class="notes-header">📋 Activity history (${sel.notes?sel.notes.length:0})</div>
-          ${sel.notes&&sel.notes.length?sel.notes.map((n,ni)=>`<div class="note-row" id="note-row-${idx}-${ni}">
-              <div class="note-date">${n.date||'—'}</div>
-              ${n.type?`<span class="note-type-badge">${n.type}</span>`:'<span style="width:2px"></span>'}
-              <div class="note-text" style="flex:1">${n.note}</div>
-              <button onclick="editNote(${idx},${ni})" style="flex-shrink:0;background:none;border:1px solid #e2e8f0;border-radius:4px;padding:1px 7px;font-size:10px;color:#64748b;cursor:pointer;margin-left:6px" title="Edit this note">✏</button>
-              <button onclick="deleteNote(${idx},${ni})" style="flex-shrink:0;background:none;border:1px solid #fca5a5;border-radius:4px;padding:1px 7px;font-size:10px;color:#ef4444;cursor:pointer;margin-left:3px" title="Delete this note">✕</button>
-            </div>`).join(''):'<div style="padding:12px;color:#94a3b8;font-size:13px">No history yet</div>'}
+          ${(()=>{
+            const _today=todayStr();
+            const upcoming=S.tasks.filter(t=>(t.clientIdx===idx||t.name===sel.company)&&t.due&&t.due>=_today)
+              .sort((a,b)=>a.due<b.due?-1:1);
+            const _key=s=>(s||'').trim().toLowerCase().slice(0,60);
+            const secBadges=t=>{
+              const tsec=S.sections.find(s=>s.id===t.secId);
+              const secName=tsec?tsec.name:'Task';
+              const badgeStyle=secName==='Follow Up'?'background:#bbf7d0;color:#14532d':
+                               secName==='Reach Out'?'background:#fef08a;color:#854d0e':
+                               'background:#dbeafe;color:#1e3a8a';
+              return `<span class="note-type-badge" style="${badgeStyle}">${secName}</span><span class="note-type-badge" style="background:#e0e7ff;color:#3730a3;cursor:pointer" onclick="S.tab='planner';render()" title="On the planner — click to view">⏳ Upcoming</span>`;
+            };
+            const matched=new Set();
+            // History note rows — with the Upcoming badge inline when a matching planner task exists
+            const noteRows=sel.notes&&sel.notes.length?sel.notes.map((n,ni)=>{
+              const mt=upcoming.find(t=>!matched.has(t.id)&&t.due===n.date&&_key(t.notes||t.name)===_key(n.note));
+              if(mt)matched.add(mt.id);
+              return `<div class="note-row" id="note-row-${idx}-${ni}">
+                <div class="note-date">${n.date||'—'}</div>
+                ${n.type?`<span class="note-type-badge">${n.type}</span>`:'<span style="width:2px"></span>'}
+                ${mt?secBadges(mt):''}
+                <div class="note-text" style="flex:1">${n.note}</div>
+                <button onclick="editNote(${idx},${ni})" style="flex-shrink:0;background:none;border:1px solid #e2e8f0;border-radius:4px;padding:1px 7px;font-size:10px;color:#64748b;cursor:pointer;margin-left:6px" title="Edit this note">✏</button>
+                <button onclick="deleteNote(${idx},${ni})" style="flex-shrink:0;background:none;border:1px solid #fca5a5;border-radius:4px;padding:1px 7px;font-size:10px;color:#ef4444;cursor:pointer;margin-left:3px" title="Delete this note">✕</button>
+              </div>`;
+            }).join(''):'';
+            // Planner tasks with no matching note still get their own row
+            const upRows=upcoming.filter(t=>!matched.has(t.id)).map(t=>`<div class="note-row" onclick="S.tab='planner';render()" style="cursor:pointer;background:#fafcff;border-left:3px solid #3b82f6" title="Click to open planner">
+                <div class="note-date">${t.due}</div>
+                ${secBadges(t)}
+                <div class="note-text" style="flex:1">${(t.notes||t.name).slice(0,120)}</div>
+              </div>`).join('');
+            return (upRows+noteRows)||'<div style="padding:12px;color:#94a3b8;font-size:13px">No history yet</div>';
+          })()}
         </div>
         <div class="add-note-section">
-          <div class="add-note-header" id="add-note-hdr-${idx}">✏ Add new note</div>
+          <div class="add-note-header" id="add-note-hdr-${idx}">📝 Track Interactions</div>
           <div class="add-note-body"><input type="hidden" id="editing-note-idx-${idx}" value=""/>
-            <div style="display:flex;gap:8px;margin-bottom:9px;flex-wrap:wrap">
-              <input type="date" id="note-date" value="${todayStr()}" class="ani" style="flex:1;min-width:130px"/>
-              <select id="note-type" class="ani" style="flex:1;min-width:120px"><option>Phone Call</option><option>Email</option><option>Visit</option><option>Follow Up</option><option>Note</option></select>
+            <div style="display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+              <div style="flex:1;min-width:135px">
+                <label style="display:block;font-size:10px;font-weight:800;color:#1e3a8a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">📅 Date</label>
+                <input type="date" id="note-date" value="${todayStr()}" class="ani" style="width:100%;border:2px solid #93c5fd;background:#f8fbff;font-weight:700;padding:8px 10px"/>
+              </div>
+              <div style="flex:1;min-width:135px">
+                <label style="display:block;font-size:10px;font-weight:800;color:#1e3a8a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">💬 Type of Interaction</label>
+                <select id="note-type" class="ani" style="width:100%;border:2px solid #93c5fd;background:#f8fbff;font-weight:700;padding:8px 10px"><option>Phone Call</option><option>Email</option><option>Visit</option><option>Follow Up</option><option>Note</option></select>
+              </div>
+              <div style="flex:1;min-width:135px">
+                <label style="display:block;font-size:10px;font-weight:800;color:#b45309;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">🗂 Planner Category</label>
+                <select id="note-cat" class="ani" style="width:100%;border:2px solid #fcd34d;background:#fffbeb;font-weight:700;padding:8px 10px">${S.sections.map(s=>`<option value="${s.id}"${s.name==='Follow Up'?' selected':''}>${s.name}</option>`).join('')}</select>
+              </div>
             </div>
-            <textarea id="note-text" class="anita" placeholder="What happened? Next steps?"></textarea>
+            <textarea id="note-text" class="anita" placeholder="What happened? Or what needs to happen next?"></textarea>
             <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
               <select id="note-stage" class="ani"><option value="">Keep stage${sel.stage?' ('+sel.stage+')':''}</option>${STAGES.map(s=>`<option value="${s}">${s}</option>`).join('')}</select>
-              <button class="cd-task-btn" onclick="saveNote(${idx})">💾 Save note</button>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="cd-task-btn" style="background:#475569" onclick="saveNote(${idx})" title="Saves to activity history only">💾 Log History / Save Note</button>
+                <button class="cd-task-btn" style="background:#15803d" onclick="saveNote(${idx},true)" title="Saves to history AND creates a planner task + calendar event on the chosen date, in the chosen category">📅 Save + Add to Planner</button>
+              </div>
             </div>
           </div>
         </div>
@@ -1452,12 +1505,53 @@ function closeAllModals(){
   render();
 }
 
+// ── TASK ↔ CLIENT AUTOCOMPLETE ────────────────────────────────────────────────
+let _taskLinkClient=null; // index into S.clients, set when a client is linked in the task modal
+function taskNameAutocomplete(q){
+  const box=document.getElementById('m-name-sug');if(!box)return;
+  if(_taskLinkClient!==null){_taskLinkClient=null;updateTaskLinkChip();} // typing clears the link
+  q=(q||'').trim().toLowerCase();
+  if(q.length<2){box.style.display='none';box.innerHTML='';return;}
+  const matches=S.clients.map((c,i)=>({c,i})).filter(x=>x.c.company&&x.c.company.toLowerCase().includes(q)).slice(0,6);
+  if(!matches.length){box.style.display='none';box.innerHTML='';return;}
+  box.innerHTML=matches.map(x=>`<div onmousedown="linkTaskClient(${x.i})"
+    style="padding:9px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:8px"
+    onmouseover="this.style.background='#eff6ff'" onmouseout="this.style.background='#fff'">
+    <span>🏢</span><strong style="flex:1">${x.c.company}</strong>
+    ${x.c.stage?`<span class="stage-pill ${stageClass(x.c.stage)}" style="font-size:10px">${x.c.stage}</span>`:''}
+  </div>`).join('');
+  box.style.display='block';
+}
+function linkTaskClient(i){
+  const c=S.clients[i];if(!c)return;
+  _taskLinkClient=i;
+  const nameEl=document.getElementById('m-name');if(nameEl)nameEl.value=c.company;
+  const box=document.getElementById('m-name-sug');if(box){box.style.display='none';box.innerHTML='';}
+  updateTaskLinkChip();
+}
+function updateTaskLinkChip(){
+  const chip=document.getElementById('m-link-chip');if(!chip)return;
+  if(_taskLinkClient!==null&&S.clients[_taskLinkClient]){
+    chip.innerHTML=`🏢 Linked to <strong>${S.clients[_taskLinkClient].company}</strong> — saving will log this to their history <span onclick="_taskLinkClient=null;updateTaskLinkChip()" style="cursor:pointer;float:right;font-weight:700;color:#0369a1">✕</span>`;
+    chip.style.display='block';
+  } else { chip.style.display='none'; chip.innerHTML=''; }
+}
+
 function buildTaskModal(){
   const t=S.editId?S.tasks.find(x=>x.id===S.editId):null;
+  _taskLinkClient=(t&&t.clientIdx!=null&&S.clients[t.clientIdx])?t.clientIdx:null;
   const secOpts=S.sections.map(s=>`<option value="${s.id}"${(t?t.secId:S.modal?.secId)===s.id?' selected':''}>${s.name}</option>`).join('');
+  const linkedC=_taskLinkClient!==null?S.clients[_taskLinkClient]:null;
   return `<div class="mbox" onclick="event.stopPropagation()">
     <h3>${t?'✏ Edit task':'+ New task'}</h3>
-    <div class="mfield"><label>Task name</label><input id="m-name" value="${t?t.name.replace(/"/g,'&quot;'):''}" placeholder="e.g. Green Knight – polo approval"/></div>
+    <div class="mfield" style="position:relative">
+      <label>Task name <span style="font-weight:400;color:#94a3b8;text-transform:none">— start typing to link a client</span></label>
+      <input id="m-name" autocomplete="off" value="${t?t.name.replace(/"/g,'&quot;'):''}" placeholder="e.g. Green Knight – polo approval"
+        oninput="taskNameAutocomplete(this.value)"
+        onblur="setTimeout(()=>{const b=document.getElementById('m-name-sug');if(b)b.style.display='none';},180)"/>
+      <div id="m-name-sug" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:#fff;border:2px solid #93c5fd;border-radius:8px;box-shadow:0 8px 20px rgba(0,0,0,.12);max-height:200px;overflow-y:auto"></div>
+      <div id="m-link-chip" style="display:${linkedC?'block':'none'};margin-top:6px;font-size:12px;background:#e0f2fe;border:1px solid #7dd3fc;border-radius:6px;padding:6px 10px;color:#0c4a6e">${linkedC?`🏢 Linked to <strong>${linkedC.company}</strong> — saving will log this to their history <span onclick="_taskLinkClient=null;updateTaskLinkChip()" style="cursor:pointer;float:right;font-weight:700;color:#0369a1">✕</span>`:''}</div>
+    </div>
     <div class="mrow">
       <div class="mfield"><label>Section</label><select id="m-sec">${secOpts}</select></div>
       <div class="mfield"><label>Status</label><select id="m-stat"><option value="normal"${!t||t.status==='normal'?' selected':''}>Normal</option><option value="urgent"${t&&t.status==='urgent'?' selected':''}>Urgent</option></select></div>
@@ -1612,7 +1706,7 @@ function buildAddToPlannerModal(){
   // Pre-fill date from last note if it exists and is in the future or today, otherwise use today
   const lastNoteDate=lastNote&&lastNote.date?lastNote.date:'';
   const prefilledDate=lastNoteDate&&lastNoteDate>=todayStr()?lastNoteDate:todayStr();
-  const secOpts=S.sections.map(s=>`<option value="${s.id}"${s.name==='Follow Up'?' selected':s.name==='Reach Out'?' selected':''}>${s.name}</option>`).join('');
+  const secOpts=S.sections.map(s=>`<option value="${s.id}"${s.name==='Follow Up'?' selected':''}>${s.name}</option>`).join('');
   return `<div class="mbox" onclick="event.stopPropagation()" style="width:460px">
     <h3>📅 Add to Planner + Calendar</h3>
     <div style="font-size:14px;font-weight:700;color:#1e3a8a;margin-bottom:4px">${c.company}</div>
@@ -1849,6 +1943,7 @@ function saveTask(){
     const t=S.tasks.find(x=>x.id===S.editId);
     if(t){
       Object.assign(t,{name,secId,status,due,notes});
+      if(_taskLinkClient!==null)t.clientIdx=_taskLinkClient;else delete t.clientIdx;
       const ev=S.events.find(e=>e.taskId===t.id);
       let evToSave=null;
       if(due){
@@ -1866,6 +1961,23 @@ function saveTask(){
   }else{
     const id='t'+Date.now();
     const task={id,name,secId,status,due,notes};
+    // If linked to a client: attach + log this to their activity history
+    let clientSave=Promise.resolve(true);
+    if(_taskLinkClient!==null&&S.clients[_taskLinkClient]){
+      task.clientIdx=_taskLinkClient;
+      const c=S.clients[_taskLinkClient];
+      if(!c.notes)c.notes=[];
+      const ntype=(sec&&(sec.name==='Follow Up'||sec.name==='Reach Out'))?'Follow Up':'Note';
+      c.notes.push({date:due||todayStr(),type:ntype,note:(notes||name).trim().slice(0,300)});
+      if(SHEETS_URL){
+        clientSave=sheetsGet({action:'saveClient',data:JSON.stringify({
+          company:c.company,stage:c.stage||'',contact:c.contact||'',
+          phone:c.phone||'',email:c.email||'',website:c.website||'',
+          address:c.address||'',size:c.size||'',focus:c.focus||'',
+          notes:c.notes||[]
+        })},10000).then(r=>r&&r.status==='ok').catch(()=>false);
+      }
+    }
     S.tasks.push(task);
     let newEv=null;
     if(due){
@@ -1874,16 +1986,20 @@ function saveTask(){
     }
     saveToLocal();
     setSyncStatus('Saving…');
-    // Save task AND event in parallel
+    _pendingSave=true; // block poll until task+event+client note confirmed
+    // Save task AND event AND client note in parallel
     Promise.all([
       sheetsSaveTask(task),
-      newEv?sheetsSaveEvent(newEv):Promise.resolve(true)
-    ]).then(([taskOk,evOk])=>{
-      const ok=taskOk&&evOk;
+      newEv?sheetsSaveEvent(newEv):Promise.resolve(true),
+      clientSave
+    ]).then(([taskOk,evOk,cOk])=>{
+      const ok=taskOk&&evOk&&cOk!==false;
+      _pendingSave=false;
       setSyncStatus(ok?'✓ Saved '+new Date().toLocaleTimeString():'⚠ Save failed — retrying',ok?'ok':'err');
       if(!ok){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,3000); }
-    });
+    }).catch(()=>{ _pendingSave=false; });
   }
+  _taskLinkClient=null;
   S.modal=null;S.editId=null;render();
 }
 function saveCalEv(){
@@ -2043,9 +2159,12 @@ function saveNewClient(){
   S.addClientModal=null;S.selClient=S.clients.length-1;S.tab='clients';render();
 }
 function saveAddToPlanner(idx){
+  if(window._atpSaving)return; // guard against double-click creating duplicates
   const nameEl=document.getElementById('atp-name');
   if(!nameEl)return;
   const name=(nameEl.value||'').trim();if(!name)return;
+  window._atpSaving=true;
+  _pendingSave=true; // block the 20s poll from hard-resetting mid-save (prevents repair duplicating the event)
   const secId=document.getElementById('atp-sec').value;
   const status=document.getElementById('atp-stat').value;
   const due=document.getElementById('atp-due').value;
@@ -2082,15 +2201,16 @@ function saveAddToPlanner(idx){
   }
   Promise.all(saves).then(results=>{
     const ok=results.every(r=>r!==false&&(!r||r.status==='ok'||r===true));
+    _pendingSave=false;window._atpSaving=false;
     setSyncStatus(ok?'✓ Saved '+new Date().toLocaleTimeString():'⚠ Save failed',ok?'ok':'err');
     if(!ok){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,3000); }
-  });
+  }).catch(()=>{_pendingSave=false;window._atpSaving=false;});
   S.addToPlannerModal=null;
   S.tab='planner';
   document.querySelectorAll('.moverlay').forEach(el=>el.remove());
   render();
 }
-function saveNote(idx){
+function saveNote(idx,addToPlanner){
   const textEl=document.getElementById('note-text');
   if(!textEl)return;
   const text=(textEl.value||'').trim();if(!text)return;
@@ -2134,23 +2254,31 @@ function saveNote(idx){
   saveToLocal();
   saveClientToSheets(c);
 
-  // Add to planner + calendar only for new notes
-  const sec=S.sections.find(s=>s.name==='Follow Up')||S.sections.find(s=>s.name==='Reach Out')||S.sections[0];
-  const taskId='t'+Date.now();
-  const task={id:taskId,name:c.company,secId:sec.id,status:'normal',due:date,notes:text.slice(0,120),clientIdx:idx};
-  S.tasks.push(task);
-  let noteEv=null;
-  if(date){
-    noteEv={id:'ev'+Date.now(),taskId:taskId,title:c.company,cat:sec.cat||'Reach Out',date,hour:9,note:text.slice(0,60)};
-    S.events.push(noteEv);
+  // "Save + Add to Planner" button: also create a planner task + calendar event
+  if(addToPlanner){
+    const catEl=document.getElementById('note-cat');
+    const sec=(catEl&&S.sections.find(s=>s.id===catEl.value))||S.sections.find(s=>s.name==='Follow Up')||S.sections[0];
+    const taskId='t'+Date.now();
+    const task={id:taskId,name:c.company,secId:sec.id,status:'normal',due:date,notes:text.slice(0,120),clientIdx:idx};
+    S.tasks.push(task);
+    let noteEv=null;
+    if(date){
+      noteEv={id:'e'+Date.now(),taskId,title:c.company,cat:sec.cat||sec.name,date,hour:9,note:text.slice(0,60)};
+      S.events.push(noteEv);
+    }
+    saveToLocal();
+    _pendingSave=true; // block poll until task+event confirmed in Sheets
+    setSyncStatus('Saving + adding to planner…');
+    Promise.all([
+      sheetsSaveTask(task),
+      noteEv?sheetsSaveEvent(noteEv):Promise.resolve(true)
+    ]).then(results=>{
+      const ok=results.every(r=>r!==false);
+      _pendingSave=false;
+      setSyncStatus(ok?'✓ Saved + added to planner '+new Date().toLocaleTimeString():'⚠ Save failed',ok?'ok':'err');
+      if(!ok){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,3000); }
+    }).catch(()=>{ _pendingSave=false; });
   }
-  saveToLocal();
-  Promise.all([
-    sheetsSaveTask(task),
-    noteEv?sheetsSaveEvent(noteEv):Promise.resolve(true)
-  ]).then(([tok,eok])=>{
-    if(!(tok&&eok)){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,3000); }
-  });
   render();
 }
 
