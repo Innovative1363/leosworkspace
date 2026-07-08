@@ -3171,13 +3171,10 @@ function calcQtTotal(){
 }
 
 // ── STARTUP ──────────────────────────────────────────────────────────────────
-// Detect if running as local file (file://) and warn user
+// Detect if running as local file (file://) and redirect straight to the live workspace
 if(window.location.protocol === 'file:'){
-  const warn = document.createElement('div');
-  warn.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#f59e0b;color:#1c1917;padding:12px 20px;font-family:sans-serif;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:space-between;gap:12px';
-  warn.innerHTML = '<span>⚠️ This is a downloaded copy — your data will not load. <a href="https://innovative1363.github.io/leosworkspace/" style="color:#1e3a8a;text-decoration:underline" target="_blank">Open the live workspace here</a> to see your data.</span>'
-    + '<button onclick="this.parentElement.remove()" style="background:none;border:none;font-size:16px;cursor:pointer;color:#1c1917;flex-shrink:0">✕</button>';
-  document.body.appendChild(warn);
+  window.location.replace('https://innovative1363.github.io/leosworkspace/');
+  throw new Error('Redirecting to live workspace'); // stop local startup — live site takes over
 }
 
 try{ render(); } catch(e){ console.error('Render failed:',e); }
