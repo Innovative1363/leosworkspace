@@ -1199,6 +1199,38 @@ function renderCard(t){
 }
 
 // Mark done: archive task but keep calendar event (greyed out)
+// ── NOTE ↔ TASK COMPLETION SYNC ──────────────────────────────────────────────
+function _clientForTask(t){
+  if(t.clientIdx!=null&&S.clients[t.clientIdx])return t.clientIdx;
+  return S.clients.findIndex(c=>c.company===t.name);
+}
+function _noteKey(s){return (s||'').trim().toLowerCase().slice(0,60);}
+function _saveClientFull(c){
+  if(!SHEETS_URL)return Promise.resolve(true);
+  return sheetsGet({action:'saveClient',data:JSON.stringify({
+    company:c.company,stage:c.stage||'',contact:c.contact||'',
+    phone:c.phone||'',email:c.email||'',website:c.website||'',
+    address:c.address||'',size:c.size||'',focus:c.focus||'',
+    notes:c.notes||[]
+  })},10000).then(r=>r&&r.status==='ok').catch(()=>false);
+}
+function completeClientNoteForTask(t){
+  const ci=_clientForTask(t);if(ci<0)return;
+  const c=S.clients[ci];if(!c||!c.notes)return;
+  const n=c.notes.find(n=>!n.done&&n.date===t.due&&_noteKey(n.note)===_noteKey(t.notes||t.name));
+  if(!n)return;
+  n.done=true;
+  saveToLocal();_saveClientFull(c);
+}
+function uncompleteClientNoteForTask(t){
+  const ci=_clientForTask(t);if(ci<0)return;
+  const c=S.clients[ci];if(!c||!c.notes)return;
+  const n=c.notes.find(n=>n.done&&n.date===t.due&&_noteKey(n.note)===_noteKey(t.notes||t.name));
+  if(!n)return;
+  delete n.done;
+  saveToLocal();_saveClientFull(c);
+}
+
 function markTaskDone(id){
   const t=S.tasks.find(x=>x.id===id);if(!t)return;
   // Prevent double-archive if already in archived
@@ -1207,6 +1239,7 @@ function markTaskDone(id){
   S.archived.push(archived);
   S.tasks=S.tasks.filter(x=>x.id!==id);
   S.events.forEach(e=>{if(e.taskId===id)e.done=true;});
+  completeClientNoteForTask(t); // mark matching client history note as completed
   saveToLocal();
   // Block poll until archive operation confirmed in Sheets
   _pendingSave=true;
@@ -1387,15 +1420,19 @@ function renderClients(){
               return `<span class="note-type-badge" style="${badgeStyle}">${secName}</span><span class="note-type-badge" style="background:#e0e7ff;color:#3730a3;cursor:pointer" onclick="S.tab='planner';render()" title="On the planner — click to view">⏳ Upcoming</span>`;
             };
             const matched=new Set();
-            // History note rows — with the Upcoming badge inline when a matching planner task exists
+            // History note rows — Upcoming badge + Mark Done button when a matching planner task exists; Completed badge when done
             const noteRows=sel.notes&&sel.notes.length?sel.notes.map((n,ni)=>{
-              const mt=upcoming.find(t=>!matched.has(t.id)&&t.due===n.date&&_key(t.notes||t.name)===_key(n.note));
+              const mt=n.done?null:upcoming.find(t=>!matched.has(t.id)&&t.due===n.date&&_key(t.notes||t.name)===_key(n.note));
               if(mt)matched.add(mt.id);
-              return `<div class="note-row" id="note-row-${idx}-${ni}">
+              const doneBadge=n.done?`<span class="note-type-badge" style="background:#bbf7d0;color:#14532d">✓ Completed</span>`:'';
+              const doneBtn=mt?`<button onclick="markTaskDone('${mt.id}')" style="flex-shrink:0;background:#15803d;color:#fff;border:none;border-radius:4px;padding:2px 9px;font-size:10px;font-weight:700;cursor:pointer;margin-left:6px" title="Mark done — archives the planner task and marks this completed">✓ Mark Done</button>`:'';
+              return `<div class="note-row" id="note-row-${idx}-${ni}"${n.done?' style="opacity:.75"':''}>
                 <div class="note-date">${n.date||'—'}</div>
                 ${n.type?`<span class="note-type-badge">${n.type}</span>`:'<span style="width:2px"></span>'}
                 ${mt?secBadges(mt):''}
-                <div class="note-text" style="flex:1">${n.note}</div>
+                ${doneBadge}
+                <div class="note-text" style="flex:1${n.done?';text-decoration:line-through;color:#64748b':''}">${n.note}</div>
+                ${doneBtn}
                 <button onclick="editNote(${idx},${ni})" style="flex-shrink:0;background:none;border:1px solid #e2e8f0;border-radius:4px;padding:1px 7px;font-size:10px;color:#64748b;cursor:pointer;margin-left:6px" title="Edit this note">✏</button>
                 <button onclick="deleteNote(${idx},${ni})" style="flex-shrink:0;background:none;border:1px solid #fca5a5;border-radius:4px;padding:1px 7px;font-size:10px;color:#ef4444;cursor:pointer;margin-left:3px" title="Delete this note">✕</button>
               </div>`;
@@ -1828,6 +1865,7 @@ function archiveTask(id){
   S.archived.push(archived);
   S.tasks=S.tasks.filter(x=>x.id!==id);
   S.events=S.events.filter(e=>e.taskId!==id&&!(e.title===t.name&&!e.recurId));
+  completeClientNoteForTask(t); // mark matching client history note as completed
   saveToLocal();
   Promise.all([
     sheetsArchiveTask(archived),
@@ -1906,6 +1944,7 @@ function undoTaskDone(taskId){
   S.tasks.push(t);
   S.archived=S.archived.filter(x=>x.id!==taskId);
   S.events.forEach(e=>{ if(e.taskId===taskId) delete e.done; });
+  uncompleteClientNoteForTask(t); // restore the history note to upcoming
   saveToLocal();
   // Block poll until all Sheets operations complete
   _pendingSave=true;
@@ -2239,7 +2278,7 @@ function saveNote(idx,addToPlanner){
   };
 
   if(editingIdx>=0&&editingIdx<c.notes.length){
-    c.notes[editingIdx]={date,type,note:text};
+    c.notes[editingIdx]={...c.notes[editingIdx],date,type,note:text};
     if(stage)c.stage=stage;
     saveToLocal();
     saveClientToSheets(c);
