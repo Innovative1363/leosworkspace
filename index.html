@@ -357,7 +357,8 @@ function sheetsGet(params, timeoutMs=25000){
     const cb='_sc'+Date.now()+Math.random().toString(36).slice(2);
     const qs=Object.entries(params).map(([k,v])=>k+'='+encodeURIComponent(v)).join('&');
     const s=document.createElement('script');
-    s.src=SHEETS_URL+'?'+qs+'&callback='+cb;
+    // Add cache-busting timestamp to prevent Google from serving stale responses
+    s.src=SHEETS_URL+'?'+qs+'&callback='+cb+'&_t='+Date.now();
     let done=false;
     window[cb]=r=>{
       if(done)return;done=true;
@@ -481,30 +482,39 @@ async function load(){
   if(!S.archived)S.archived=[];
   updateCounts();
 
-  // Step 2: load from Sheets to get latest data from both users
+  // Step 2: load from Sheets — always the source of truth
   if(!SHEETS_URL){setSyncStatus('No SHEETS_URL configured','err');return;}
   setSyncStatus('Loading from Sheets…');
-  try{
-    const data=await sheetsGet({action:'load'});
-    if(data&&data.status==='ok'){
-      hardResetFromSheets(data);
-      _loadedFromSheets=true;
-      _pendingSave=false;
-      saveToLocal();
-      setSyncStatus('✓ Loaded '+new Date().toLocaleTimeString(),'ok');
-    } else {
-      setSyncStatus('⚠ Load error — using local data','err');
-    }
-  }catch(err){
-    if(err.message==='SCRIPT_LOAD_FAILED'){
-      setSyncStatus('⚠ Not connected — click 🔍 Test to diagnose','err');
-      console.warn('Sheets load failed: deployment may not be public. Click Test button to diagnose.');
-    } else if(err.message==='TIMEOUT'){
-      setSyncStatus('⚠ Timed out — using local data','err');
-      console.warn('Sheets load timed out');
-    } else {
-      setSyncStatus('⚠ Offline — using local data','err');
-      console.warn('Sheets load failed:',err);
+  // Try up to 2 times (handles transient Google Script cold-start delays)
+  let loaded=false;
+  for(let attempt=1;attempt<=2;attempt++){
+    try{
+      const data=await sheetsGet({action:'load'},attempt===1?20000:30000);
+      if(data&&data.status==='ok'){
+        hardResetFromSheets(data);
+        _loadedFromSheets=true;
+        _pendingSave=false;
+        saveToLocal();
+        setSyncStatus('✓ Loaded '+new Date().toLocaleTimeString(),'ok');
+        loaded=true;
+        break;
+      } else {
+        if(attempt===2) setSyncStatus('⚠ Load error — check Apps Script','err');
+      }
+    }catch(err){
+      if(attempt===2){
+        if(err.message==='SCRIPT_LOAD_FAILED'){
+          setSyncStatus('⚠ Not connected — click 🔍 Test','err');
+        } else if(err.message==='TIMEOUT'){
+          setSyncStatus('⚠ Timed out — click 🔄 Reload','err');
+        } else {
+          setSyncStatus('⚠ Offline — click 🔄 Reload','err');
+        }
+        console.warn('Sheets load failed after 2 attempts:',err);
+      } else {
+        setSyncStatus('Retrying…');
+        await new Promise(r=>setTimeout(r,2000));
+      }
     }
   }
   updateCounts();
@@ -810,28 +820,39 @@ function setSyncStatus(msg,cls){
 
 // Manual reload from Sheets
 async function reloadFromSheets(){
-  if(!confirm('Reload from Sheets?\n\nThis pulls the latest saved data from Google Sheets as the source of truth. Any unsynced local changes will be replaced.'))return;
-  setSyncStatus('Reloading…');
-  try{
-    const data=await sheetsGet({action:'load'});
-    if(data&&data.status==='ok'){
-      // HARD RESET: Sheets is the truth — replace local state completely
-      hardResetFromSheets(data);
-      saveToLocal();
-      _lastSheetsTimestamp=data.timestamp||null;
-      _pendingSave=false;
-      render();
-      setSyncStatus('✓ Reloaded '+new Date().toLocaleTimeString(),'ok');
-    } else {
-      setSyncStatus('Reload failed — '+((data&&data.message)||'check URL'),'err');
-    }
-  }catch(e){
-    if(e.message==='SCRIPT_LOAD_FAILED'){
-      setSyncStatus('⚠ Reload failed — deployment not public? Click 🔍 Test','err');
-    } else {
-      setSyncStatus('⚠ Reload failed — '+e.message,'err');
+  setSyncStatus('Reloading from Sheets…');
+  let success=false;
+  for(let attempt=1;attempt<=2;attempt++){
+    try{
+      const data=await sheetsGet({action:'load'},attempt===1?20000:30000);
+      if(data&&data.status==='ok'){
+        hardResetFromSheets(data);
+        saveToLocal();
+        _lastSheetsTimestamp=data.timestamp||null;
+        _pendingSave=false;
+        render();
+        setSyncStatus('✓ Reloaded '+new Date().toLocaleTimeString(),'ok');
+        success=true;
+        break;
+      } else {
+        if(attempt===2) setSyncStatus('⚠ Reload failed — '+(data&&data.message||'check Apps Script'),'err');
+      }
+    }catch(e){
+      if(attempt===2){
+        if(e.message==='SCRIPT_LOAD_FAILED'){
+          setSyncStatus('⚠ Not connected — click 🔍 Test to diagnose','err');
+        } else if(e.message==='TIMEOUT'){
+          setSyncStatus('⚠ Timed out — try again in a moment','err');
+        } else {
+          setSyncStatus('⚠ Reload failed — '+e.message,'err');
+        }
+      } else {
+        setSyncStatus('Retrying…');
+        await new Promise(r=>setTimeout(r,2000));
+      }
     }
   }
+  return success;
 }
 
 // Hard reset: Sheets wins completely, replaces all local state
@@ -1587,20 +1608,36 @@ function buildAddClientModal(){
 
 function buildAddToPlannerModal(){
   const m=S.addToPlannerModal;const c=S.clients[m.clientIdx];
-  const secOpts=S.sections.map(s=>`<option value="${s.id}"${s.name==='Reach Out'?' selected':''}>${s.name}</option>`).join('');
-  return `<div class="mbox" onclick="event.stopPropagation()">
+  const lastNote=c.notes&&c.notes.length?c.notes[c.notes.length-1]:null;
+  // Pre-fill date from last note if it exists and is in the future or today, otherwise use today
+  const lastNoteDate=lastNote&&lastNote.date?lastNote.date:'';
+  const prefilledDate=lastNoteDate&&lastNoteDate>=todayStr()?lastNoteDate:todayStr();
+  const secOpts=S.sections.map(s=>`<option value="${s.id}"${s.name==='Follow Up'?' selected':s.name==='Reach Out'?' selected':''}>${s.name}</option>`).join('');
+  return `<div class="mbox" onclick="event.stopPropagation()" style="width:460px">
     <h3>📅 Add to Planner + Calendar</h3>
-    <div style="font-size:14px;font-weight:700;color:#1e3a8a;margin-bottom:12px">${c.company}</div>
+    <div style="font-size:14px;font-weight:700;color:#1e3a8a;margin-bottom:4px">${c.company}</div>
+    ${lastNote?`<div style="font-size:11px;color:#64748b;margin-bottom:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:7px 10px">
+      📋 Last note (${lastNote.date||'no date'}): <em>${(lastNote.note||'').slice(0,80)}${lastNote.note&&lastNote.note.length>80?'…':''}</em>
+    </div>`:''}
     <div class="mfield"><label>Task name</label><input id="atp-name" value="${c.company.replace(/"/g,'&quot;')}"/></div>
     <div class="mrow">
       <div class="mfield"><label>Section</label><select id="atp-sec">${secOpts}</select></div>
       <div class="mfield"><label>Status</label><select id="atp-stat"><option value="normal">Normal</option><option value="urgent">Urgent</option></select></div>
     </div>
     <div class="mrow">
-      <div class="mfield"><label>Due date</label><input id="atp-due" type="date" value="${todayStr()}"/></div>
-      <div class="mfield"><label>Calendar time</label><select id="atp-hr">${HOURS.map((h,i)=>`<option value="${h}">${HLBL[i]}</option>`).join('')}</select></div>
+      <div class="mfield"><label>Due date</label><input id="atp-due" type="date" value="${prefilledDate}"/></div>
+      <div class="mfield"><label>Calendar time</label><select id="atp-hr">${HOURS.map((h,i)=>`<option value="${h}"${h===9?' selected':''}>${HLBL[i]}</option>`).join('')}</select></div>
     </div>
-    <div class="mfield"><label>Notes</label><textarea id="atp-notes" placeholder="What needs to happen?">${c.notes&&c.notes.length?c.notes[c.notes.length-1].note.slice(0,100):''}</textarea></div>
+    <div class="mfield"><label>Notes / what to do</label><textarea id="atp-notes" placeholder="What needs to happen?">${lastNote?lastNote.note.slice(0,120):''}</textarea></div>
+    <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:10px 12px;margin-bottom:10px">
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:12px;color:#374151">
+        <input type="checkbox" id="atp-log-note" style="margin-top:2px;flex-shrink:0" checked/>
+        <div>
+          <strong>Also save as activity note</strong>
+          <div style="color:#64748b;margin-top:2px">Logs this to ${c.company}'s activity history so it appears in the timeline</div>
+        </div>
+      </label>
+    </div>
     <div class="modal-btns">
       <button class="btn" onclick="closeAllModals()">Cancel</button>
       <button class="btn primary" onclick="saveAddToPlanner(${m.clientIdx})">📅 Add to Planner + Calendar</button>
@@ -1989,7 +2026,20 @@ function saveNewClient(){
   if(exactExists){alert('⛔ "'+name+'" already exists.');return;}
   const c={company:name,size:document.getElementById('ac-size').value,address:document.getElementById('ac-addr').value,contact:document.getElementById('ac-contact').value,phone:document.getElementById('ac-phone').value,website:document.getElementById('ac-web').value,focus:document.getElementById('ac-focus').value,email:document.getElementById('ac-email').value,stage:document.getElementById('ac-stage').value,notes:[],files:[]};
   S.clients.push(c);
-  save();
+  saveToLocal();
+  updateCounts();
+  _pendingSave=true;
+  setSyncStatus('Saving…');
+  sheetsGet({action:'saveClient',data:JSON.stringify({
+    company:c.company,stage:c.stage||'',contact:c.contact||'',
+    phone:c.phone||'',email:c.email||'',website:c.website||'',
+    address:c.address||'',size:c.size||'',focus:c.focus||'',
+    notes:[]
+  })},10000).then(r=>{
+    _pendingSave=false;
+    setSyncStatus(r&&r.status==='ok'?'✓ Saved '+new Date().toLocaleTimeString():'⚠ Save failed',
+      r&&r.status==='ok'?'ok':'err');
+  }).catch(()=>{_pendingSave=false;setSyncStatus('⚠ Save failed','err');});
   S.addClientModal=null;S.selClient=S.clients.length-1;S.tab='clients';render();
 }
 function saveAddToPlanner(idx){
@@ -2001,6 +2051,7 @@ function saveAddToPlanner(idx){
   const due=document.getElementById('atp-due').value;
   const notes=document.getElementById('atp-notes').value;
   const hr=parseInt(document.getElementById('atp-hr').value);
+  const logNote=document.getElementById('atp-log-note')&&document.getElementById('atp-log-note').checked;
   const sec=S.sections.find(s=>s.id===secId);const cat=sec?sec.cat||sec.name:'Other';
   const id='t'+Date.now();
   const task={id,name,secId,status,due,notes,clientIdx:idx};
@@ -2010,12 +2061,27 @@ function saveAddToPlanner(idx){
     atpEv={id:'e'+Date.now(),taskId:id,title:name,cat,date:due,hour:hr,note:notes.slice(0,60)};
     S.events.push(atpEv);
   }
+  // Optionally log as activity note on the client
+  const c=S.clients[idx];
+  if(logNote&&c&&notes.trim()){
+    if(!c.notes)c.notes=[];
+    c.notes.push({date:due||todayStr(),type:'Follow Up',note:notes.trim().slice(0,300)});
+  }
   saveToLocal();
-  Promise.all([
+  const saves=[
     sheetsSaveTask(task),
     atpEv?sheetsSaveEvent(atpEv):Promise.resolve(true)
-  ]).then(([tok,eok])=>{
-    const ok=tok&&eok;
+  ];
+  if(logNote&&c&&notes.trim()){
+    saves.push(sheetsGet({action:'saveClient',data:JSON.stringify({
+      company:c.company,stage:c.stage||'',contact:c.contact||'',
+      phone:c.phone||'',email:c.email||'',website:c.website||'',
+      address:c.address||'',size:c.size||'',focus:c.focus||'',
+      notes:c.notes||[]
+    })},10000));
+  }
+  Promise.all(saves).then(results=>{
+    const ok=results.every(r=>r!==false&&(!r||r.status==='ok'||r===true));
     setSyncStatus(ok?'✓ Saved '+new Date().toLocaleTimeString():'⚠ Save failed',ok?'ok':'err');
     if(!ok){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,3000); }
   });
@@ -2273,15 +2339,23 @@ function importCSV(e){
     // Parse headers from first row
     const headers=lines[0].split(',').map(h=>h.replace(/^"|"$/g,'').trim().toLowerCase());
     const map={
-      company:['company','name','company name','business','organization'],
-      contact:['contact','contact name','person','rep'],
+      company:['company','name','company name','business','organization','customer name'],
+      contact:['contact','contact name','person','rep','primary contact'],
       phone:['phone','phone number','tel','telephone'],
       email:['email','email address','e-mail'],
       website:['website','web','url','site'],
       address:['address','location','city','addr'],
       stage:['stage','status','relationship'],
-      focus:['focus','services','type','industry'],
-      size:['size','employees','headcount']
+      focus:['focus','services','type','industry','service item','category'],
+      size:['size','employees','headcount','company size']
+    };
+    // NetSuite status -> workspace stage mapping
+    const statusMap={
+      'customer-closed won':'Customer',
+      'customer-lost customer':'Try Again',
+      'customer':'Customer',
+      'prospect':'Reach out',
+      'lead':'Reach out'
     };
     function findCol(field){const aliases=map[field]||[field];for(const a of aliases){const i=headers.findIndex(h=>h.includes(a));if(i>=0)return i;}return -1;}
     const cols={};Object.keys(map).forEach(k=>{cols[k]=findCol(k);});
@@ -2298,8 +2372,10 @@ function importCSV(e){
       }
       const get=c=>c>=0&&c<row.length?(row[c]||'').replace(/^"|"$/g,'').trim():'';
       const company=get(cols.company);if(!company)continue;
+      const rawStage=(get(cols.stage)||'').trim();
+      const mappedStage=statusMap[rawStage.toLowerCase()]||rawStage;
       const newClient={company,contact:get(cols.contact),phone:get(cols.phone),email:get(cols.email),
-        website:get(cols.website),address:get(cols.address),stage:get(cols.stage),
+        website:get(cols.website),address:get(cols.address),stage:mappedStage,
         focus:get(cols.focus),size:get(cols.size),notes:[],files:[]};
       const existingIdx=S.clients.findIndex(c=>c.company.toLowerCase()===company.toLowerCase());
       if(existingIdx>=0){
@@ -2322,12 +2398,14 @@ function importCSV(e){
     }
     S.clients.push(...newClients);
     save();render();
-    if(duplicateReview.length){
-      showDuplicateReview(duplicateReview,newClients.length,updated);
-    } else if(!newClients.length&&!updated){
-      alert('No companies imported. Make sure your CSV has a "Company" or "Name" column header.');
+    if(duplicateReview.length||newClients.length||updated){
+      if(duplicateReview.length){
+        showDuplicateReview(duplicateReview,newClients.length,updated);
+      } else {
+        setSyncStatus('✓ CSV: +'+newClients.length+' added, '+updated+' updated','ok');
+      }
     } else {
-      setSyncStatus('✓ CSV: +'+newClients.length+' added, '+updated+' updated','ok');
+      alert('No companies imported.\n\nMake sure your CSV has a column named "Company", "Name", or "Customer Name".\nColumns found: '+headers.slice(0,8).join(', ')+'...');
     }
   };
   reader.readAsText(file);
@@ -3093,6 +3171,15 @@ function calcQtTotal(){
 }
 
 // ── STARTUP ──────────────────────────────────────────────────────────────────
+// Detect if running as local file (file://) and warn user
+if(window.location.protocol === 'file:'){
+  const warn = document.createElement('div');
+  warn.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#f59e0b;color:#1c1917;padding:12px 20px;font-family:sans-serif;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:space-between;gap:12px';
+  warn.innerHTML = '<span>⚠️ This is a downloaded copy — your data will not load. <a href="https://innovative1363.github.io/leosworkspace/" style="color:#1e3a8a;text-decoration:underline" target="_blank">Open the live workspace here</a> to see your data.</span>'
+    + '<button onclick="this.parentElement.remove()" style="background:none;border:none;font-size:16px;cursor:pointer;color:#1c1917;flex-shrink:0">✕</button>';
+  document.body.appendChild(warn);
+}
+
 try{ render(); } catch(e){ console.error('Render failed:',e); }
 (async function(){
   try{ await load(); } catch(e){ console.error('Load failed:',e); setSyncStatus('Load error — refresh page','err'); }
@@ -3105,13 +3192,12 @@ try{ render(); } catch(e){ console.error('Render failed:',e); }
       const data=await sheetsGet({action:'load'},15000);
       if(!data||data.status!=='ok')return;
 
-      // Safety check: never accept Sheets data that has FEWER tasks than local
-      // This prevents a stale Sheets read from wiping local changes
+      // Safety check: only skip poll if Sheets has NO tasks but we have local tasks
+      // (means our last save hasn't landed yet - don't wipe local with empty Sheets)
       const sheetsTasks=(data.tasks||[]).length;
       const localTasks=S.tasks.length;
-      if(sheetsTasks<localTasks){
-        // Sheets has less data — our save probably hasn't landed yet
-        // Push our data to Sheets again and skip this poll cycle
+      if(sheetsTasks===0&&localTasks>0){
+        // Sheets appears empty — save hasn't landed yet, retry
         if(!_syncing){ _pendingSave=true; clearTimeout(_syncDebounce); _syncDebounce=setTimeout(syncToSheets,2000); }
         return;
       }
@@ -3121,6 +3207,7 @@ try{ render(); } catch(e){ console.error('Render failed:',e); }
       const prevRecur=S.recurRules.map(r=>r.id+r.title).sort().join(',');
       const prevSections=S.sections.map(s=>s.id+s.name).sort().join(',');
       const prevArchived=S.archived.map(a=>a.id).sort().join(',');
+      const prevClients=(S.clients||[]).map(c=>c.company+(c.stage||'')+(c.notes||[]).length).sort().join(',');
 
       // Apply Sheets data
       hardResetFromSheets(data);
@@ -3130,9 +3217,11 @@ try{ render(); } catch(e){ console.error('Render failed:',e); }
       const newRecur=S.recurRules.map(r=>r.id+r.title).sort().join(',');
       const newSections=S.sections.map(s=>s.id+s.name).sort().join(',');
       const newArchived=S.archived.map(a=>a.id).sort().join(',');
+      const newClients=(S.clients||[]).map(c=>c.company+(c.stage||'')+(c.notes||[]).length).sort().join(',');
 
       const changed=prevTasks!==newTasks||prevRecur!==newRecur||
-                    prevSections!==newSections||prevArchived!==newArchived;
+                    prevSections!==newSections||prevArchived!==newArchived||
+                    prevClients!==newClients;
       if(changed){
         saveToLocal();
         setSyncStatus('↻ Synced '+new Date().toLocaleTimeString(),'ok');
