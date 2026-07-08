@@ -2357,7 +2357,14 @@ function importCSV(e){
       'prospect':'Reach out',
       'lead':'Reach out'
     };
-    function findCol(field){const aliases=map[field]||[field];for(const a of aliases){const i=headers.findIndex(h=>h.includes(a));if(i>=0)return i;}return -1;}
+    function findCol(field){
+      const aliases=map[field]||[field];
+      // Pass 1: exact header match (prevents "company" grabbing "Company Size (2)")
+      for(const a of aliases){const i=headers.findIndex(h=>h===a);if(i>=0)return i;}
+      // Pass 2: substring fallback
+      for(const a of aliases){const i=headers.findIndex(h=>h.includes(a));if(i>=0)return i;}
+      return -1;
+    }
     const cols={};Object.keys(map).forEach(k=>{cols[k]=findCol(k);});
     
     const newClients=[];let updated=0;
