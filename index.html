@@ -1469,10 +1469,10 @@ function renderClients(){
               <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
                 <button id="note-cancel-btn-${idx}" class="cd-task-btn" style="display:none;background:#dc2626" onclick="cancelNoteEdit(${idx})" title="Discard changes and exit edit mode">✖ Cancel Edit</button>
                 <button class="cd-task-btn" style="background:#475569" onclick="saveNote(${idx})" title="Saves to activity history only">💾 Log History / Save Note</button>
-                <div>
+                <div style="position:relative">
                   <label style="display:block;font-size:10px;font-weight:800;color:#b45309;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">⏰ Time</label>
-                  <input id="note-time" list="note-time-list" value="9AM" autocomplete="off" class="ani" style="width:92px;border:2px solid #fcd34d;background:#fffbeb;font-weight:700;padding:8px 10px" title="Type a time (e.g. 2pm, 10:30am) or pick from the list — used by Save + Add to Planner" onfocus="this.dataset.prev=this.value;this.value=''" onblur="if(!this.value.trim())this.value=this.dataset.prev||'9AM'"/>
-                  <datalist id="note-time-list">${HLBL.map(l=>`<option value="${l}">`).join('')}</datalist>
+                  <input id="note-time" value="9AM" autocomplete="off" class="ani" style="width:92px;border:2px solid #fcd34d;background:#fffbeb;font-weight:700;padding:8px 10px" title="Type a time (e.g. 2pm, 10:30am) or pick from the list — used by Save + Add to Planner" onfocus="noteTimeOpen(this)" oninput="noteTimeRender(this.value)" onblur="setTimeout(noteTimeClose,180)"/>
+                  <div id="note-time-dd" style="display:none;position:fixed;z-index:99999;background:#fff;border:2px solid #fcd34d;border-radius:8px;box-shadow:0 8px 20px rgba(0,0,0,.25);max-height:190px;overflow-y:auto"></div>
                 </div>
                 <button class="cd-task-btn" style="background:#15803d" onclick="saveNote(${idx},true)" title="Saves to history AND creates a planner task + calendar event at the chosen date/time, in the chosen category">📅 Save + Add to Planner</button>
               </div>
@@ -3204,6 +3204,43 @@ function cancelNoteEdit(clientIdx){
   if(hdrEl){hdrEl.textContent='📝 Track Interactions';hdrEl.style.background='';}
   if(cancelBtn)cancelBtn.style.display='none';
 }
+// ── TIME COMBO DROPDOWN (click = full list, type = overwrite + filter) ───────
+function noteTimeOpen(el){
+  el.dataset.prev=el.value;
+  el.value='';
+  noteTimeRender('');
+}
+function noteTimeRender(q){
+  const dd=document.getElementById('note-time-dd');
+  const el=document.getElementById('note-time');
+  if(!dd||!el)return;
+  q=(q||'').trim().toLowerCase();
+  let opts=HLBL.filter(l=>l.toLowerCase().startsWith(q));
+  if(!opts.length)opts=HLBL; // free-form typing still allowed; keep full list visible
+  dd.innerHTML=opts.map(l=>`<div onmousedown="noteTimePick('${l}')" style="padding:7px 14px;cursor:pointer;font-size:13px;font-weight:700;color:#1e293b" onmouseover="this.style.background='#fffbeb'" onmouseout="this.style.background='#fff'">${l}</div>`).join('');
+  // Anchor to the input on the top layer (escapes overflow:hidden containers)
+  const r=el.getBoundingClientRect();
+  dd.style.left=r.left+'px';
+  dd.style.minWidth=r.width+'px';
+  if(window.innerHeight-r.bottom<200){ // not enough room below — open upward
+    dd.style.top='auto';
+    dd.style.bottom=(window.innerHeight-r.top+4)+'px';
+  }else{
+    dd.style.bottom='auto';
+    dd.style.top=(r.bottom+4)+'px';
+  }
+  dd.style.display='block';
+}
+function noteTimePick(v){
+  const el=document.getElementById('note-time');if(el)el.value=v;
+  const dd=document.getElementById('note-time-dd');if(dd)dd.style.display='none';
+}
+function noteTimeClose(){
+  const dd=document.getElementById('note-time-dd');if(dd)dd.style.display='none';
+  const el=document.getElementById('note-time');
+  if(el&&!el.value.trim())el.value=el.dataset.prev||'9AM';
+}
+
 // Parse a typed time like "9", "2pm", "10:30 AM", "14:00" into a calendar hour (8–17)
 function parseTimeToHour(str){
   if(!str)return null;
