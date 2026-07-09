@@ -1466,9 +1466,15 @@ function renderClients(){
             <textarea id="note-text" class="anita" placeholder="What happened? Or what needs to happen next?"></textarea>
             <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
               <select id="note-stage" class="ani"><option value="">Keep stage${sel.stage?' ('+sel.stage+')':''}</option>${STAGES.map(s=>`<option value="${s}">${s}</option>`).join('')}</select>
-              <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+                <button id="note-cancel-btn-${idx}" class="cd-task-btn" style="display:none;background:#dc2626" onclick="cancelNoteEdit(${idx})" title="Discard changes and exit edit mode">✖ Cancel Edit</button>
                 <button class="cd-task-btn" style="background:#475569" onclick="saveNote(${idx})" title="Saves to activity history only">💾 Log History / Save Note</button>
-                <button class="cd-task-btn" style="background:#15803d" onclick="saveNote(${idx},true)" title="Saves to history AND creates a planner task + calendar event on the chosen date, in the chosen category">📅 Save + Add to Planner</button>
+                <div>
+                  <label style="display:block;font-size:10px;font-weight:800;color:#b45309;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">⏰ Time</label>
+                  <input id="note-time" list="note-time-list" value="9AM" autocomplete="off" class="ani" style="width:92px;border:2px solid #fcd34d;background:#fffbeb;font-weight:700;padding:8px 10px" title="Type a time (e.g. 2pm, 10:30am) or pick from the list — used by Save + Add to Planner" onfocus="this.dataset.prev=this.value;this.value=''" onblur="if(!this.value.trim())this.value=this.dataset.prev||'9AM'"/>
+                  <datalist id="note-time-list">${HLBL.map(l=>`<option value="${l}">`).join('')}</datalist>
+                </div>
+                <button class="cd-task-btn" style="background:#15803d" onclick="saveNote(${idx},true)" title="Saves to history AND creates a planner task + calendar event at the chosen date/time, in the chosen category">📅 Save + Add to Planner</button>
               </div>
             </div>
           </div>
@@ -2302,7 +2308,9 @@ function saveNote(idx,addToPlanner){
     S.tasks.push(task);
     let noteEv=null;
     if(date){
-      noteEv={id:'e'+Date.now(),taskId,title:c.company,cat:sec.cat||sec.name,date,hour:9,note:text.slice(0,60)};
+      const timeEl=document.getElementById('note-time');
+      const evHour=parseTimeToHour(timeEl?timeEl.value:'')||9;
+      noteEv={id:'e'+Date.now(),taskId,title:c.company,cat:sec.cat||sec.name,date,hour:evHour,note:text.slice(0,60)};
       S.events.push(noteEv);
     }
     saveToLocal();
@@ -3182,10 +3190,43 @@ async function saveFollowUpSchedule(idx){
 }
 
 // ── NOTE EDIT / DELETE ────────────────────────────────────────────────────────
+function cancelNoteEdit(clientIdx){
+  const dateEl=document.getElementById('note-date');
+  const typeEl=document.getElementById('note-type');
+  const textEl=document.getElementById('note-text');
+  const editingEl=document.getElementById('editing-note-idx-'+clientIdx);
+  const hdrEl=document.getElementById('add-note-hdr-'+clientIdx);
+  const cancelBtn=document.getElementById('note-cancel-btn-'+clientIdx);
+  if(dateEl)dateEl.value=todayStr();
+  if(typeEl)typeEl.selectedIndex=0;
+  if(textEl)textEl.value='';
+  if(editingEl)editingEl.value='';
+  if(hdrEl){hdrEl.textContent='📝 Track Interactions';hdrEl.style.background='';}
+  if(cancelBtn)cancelBtn.style.display='none';
+}
+// Parse a typed time like "9", "2pm", "10:30 AM", "14:00" into a calendar hour (8–17)
+function parseTimeToHour(str){
+  if(!str)return null;
+  const m=String(str).trim().toLowerCase().match(/^(\d{1,2})(?::(\d{2}))?\s*(a|p)?\.?m?\.?$/);
+  if(!m)return null;
+  let h=parseInt(m[1],10);if(isNaN(h))return null;
+  const ap=m[3]||null;
+  if(ap==='p'&&h<12)h+=12;
+  if(ap==='a'&&h===12)h=0;
+  if(!ap&&h>=1&&h<8)h+=12; // bare "2" means 2PM within business hours
+  if(h<8)h=8;if(h>17)h=17;
+  return h;
+}
+
 function editNote(clientIdx, noteIdx){
   const c=S.clients[clientIdx];
   const n=c.notes[noteIdx];
   if(!n)return;
+  // Pressing ✏ on the note already being edited exits edit mode
+  const curEl=document.getElementById('editing-note-idx-'+clientIdx);
+  if(curEl&&curEl.value===String(noteIdx)){cancelNoteEdit(clientIdx);return;}
+  const cancelBtn=document.getElementById('note-cancel-btn-'+clientIdx);
+  if(cancelBtn)cancelBtn.style.display='';
   // Populate the add-note form with this note's data
   const dateEl=document.getElementById('note-date');
   const typeEl=document.getElementById('note-type');
